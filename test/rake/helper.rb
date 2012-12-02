@@ -1,4 +1,5 @@
 require 'rubygems'
+$:.unshift File.expand_path('../../lib', __FILE__)
 
 begin
   gem 'minitest'
@@ -488,5 +489,61 @@ end
     VERBOSE
   end
 
+  def rakefile_test_signal
+    rakefile <<-TEST_SIGNAL
+require 'rake/testtask'
+
+Rake::TestTask.new(:a) do |t|
+  t.test_files = ['a_test.rb']
 end
 
+Rake::TestTask.new(:b) do |t|
+  t.test_files = ['b_test.rb']
+end
+
+task :test do
+  Rake::Task[:a].invoke rescue nil
+  Rake::Task[:b].invoke rescue nil
+end
+
+task :default => :test
+    TEST_SIGNAL
+    open 'a_test.rb', 'w' do |io|
+      io << 'puts "ATEST"' << "\n"
+      io << '$stdout.flush' << "\n"
+      io << 'Process.kill("TERM", $$)' << "\n"
+    end
+    open 'b_test.rb', 'w' do |io|
+      io << 'puts "BTEST"' << "\n"
+      io << '$stdout.flush' << "\n"
+    end
+  end
+
+  def rakefile_failing_test_task
+    rakefile <<-TEST_TASK
+require 'rake/testtask'
+
+task :default => :test
+Rake::TestTask.new(:test) do |t|
+  t.test_files = ['a_test.rb']
+end
+    TEST_TASK
+    open 'a_test.rb', 'w' do |io|
+      io << "require 'minitest/autorun'\n"
+      io << "class ExitTaskTest < MiniTest::Unit::TestCase\n"
+      io << "  def test_exit\n"
+      io << "    assert false, 'this should fail'\n"
+      io << "  end\n"
+      io << "end\n"
+    end
+  end
+
+  def rakefile_stand_alone_filelist
+    open 'stand_alone_filelist.rb', 'w' do |io|
+      io << "require 'rake/file_list'\n"
+      io << "FL = Rake::FileList['*.rb']\n"
+      io << "puts FL\n"
+    end
+  end
+
+end

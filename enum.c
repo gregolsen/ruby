@@ -18,7 +18,12 @@
 #define STATIC_ASSERT(name, expr) typedef int static_assert_##name##_check[1 - 2*!(expr)]
 
 VALUE rb_mEnumerable;
+
 static ID id_next;
+static ID id_div;
+static ID id_call;
+static ID id_size;
+
 #define id_each idEach
 #define id_eqq  idEqq
 #define id_cmp  idCmp
@@ -217,7 +222,7 @@ enum_find(int argc, VALUE *argv, VALUE obj)
 	return memo->u1.value;
     }
     if (!NIL_P(if_none)) {
-	return rb_funcall(if_none, rb_intern("call"), 0, 0);
+	return rb_funcall(if_none, id_call, 0, 0);
     }
     return Qnil;
 }
@@ -304,6 +309,14 @@ find_all_i(VALUE i, VALUE ary, int argc, VALUE *argv)
     return Qnil;
 }
 
+static VALUE
+enum_size(VALUE self, VALUE args)
+{
+    VALUE r;
+    r = rb_check_funcall(self, id_size, 0, 0);
+    return (r == Qundef) ? Qnil : r;
+}
+
 /*
  *  call-seq:
  *     enum.find_all { |obj| block } -> array
@@ -311,15 +324,17 @@ find_all_i(VALUE i, VALUE ary, int argc, VALUE *argv)
  *     enum.find_all                 -> an_enumerator
  *     enum.select                   -> an_enumerator
  *
- *  Returns an array containing all elements of <i>enum</i> for which
- *  <em>block</em> is not <code>false</code> (see also
- *  <code>Enumerable#reject</code>).
+ *  Returns an array containing all elements of +enum+
+ *  for which the given +block+ returns a true value.
  *
- *  If no block is given, an enumerator is returned instead.
+ *  If no block is given, an Enumerator is returned instead.
  *
  *
  *     (1..10).find_all { |i|  i % 3 == 0 }   #=> [3, 6, 9]
  *
+ *     [1,2,3,4,5].select { |num|  num.even?  }   #=> [2, 4]
+ *
+ *  See also Enumerable#reject.
  */
 
 static VALUE
@@ -327,7 +342,7 @@ enum_find_all(VALUE obj)
 {
     VALUE ary;
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     ary = rb_ary_new();
     rb_block_call(obj, id_each, 0, 0, find_all_i, ary);
@@ -351,13 +366,16 @@ reject_i(VALUE i, VALUE ary, int argc, VALUE *argv)
  *     enum.reject { |obj| block } -> array
  *     enum.reject                 -> an_enumerator
  *
- *  Returns an array for all elements of <i>enum</i> for which
- *  <em>block</em> is false (see also <code>Enumerable#find_all</code>).
+ *  Returns an array for all elements of +enum+ for which the given
+ *  +block+ returns false.
  *
- *  If no block is given, an enumerator is returned instead.
+ *  If no block is given, an Enumerator is returned instead.
  *
  *     (1..10).reject { |i|  i % 3 == 0 }   #=> [1, 2, 4, 5, 7, 8, 10]
  *
+ *     [1, 2, 3, 4, 5].reject { |num| num.even? } #=> [1, 3, 5]
+ *
+ *  See also Enumerable#find_all.
  */
 
 static VALUE
@@ -365,7 +383,7 @@ enum_reject(VALUE obj)
 {
     VALUE ary;
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     ary = rb_ary_new();
     rb_block_call(obj, id_each, 0, 0, reject_i, ary);
@@ -412,7 +430,7 @@ enum_collect(VALUE obj)
 {
     VALUE ary;
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     ary = rb_ary_new();
     rb_block_call(obj, id_each, 0, 0, collect_i, ary);
@@ -459,7 +477,7 @@ enum_flat_map(VALUE obj)
 {
     VALUE ary;
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     ary = rb_ary_new();
     rb_block_call(obj, id_each, 0, 0, flat_map_i, ary);
@@ -634,7 +652,7 @@ enum_partition(VALUE obj)
 {
     NODE *memo;
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     memo = NEW_MEMO(rb_ary_new(), rb_ary_new(), 0);
     rb_block_call(obj, id_each, 0, 0, partition_i, (VALUE)memo);
@@ -682,7 +700,7 @@ enum_group_by(VALUE obj)
 {
     VALUE hash;
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     hash = rb_hash_new();
     rb_block_call(obj, id_each, 0, 0, group_by_i, hash);
@@ -891,7 +909,7 @@ enum_sort_by(VALUE obj)
     long i;
     struct sort_by_data *data;
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     if (RB_TYPE_P(obj, T_ARRAY) && RARRAY_LEN(obj) <= LONG_MAX/2) {
 	ary = rb_ary_new2(RARRAY_LEN(obj)*2);
@@ -1431,7 +1449,7 @@ enum_min_by(VALUE obj)
 {
     NODE *memo;
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     memo = NEW_MEMO(Qundef, Qnil, 0);
     rb_block_call(obj, id_each, 0, 0, min_by_i, (VALUE)memo);
@@ -1477,7 +1495,7 @@ enum_max_by(VALUE obj)
 {
     NODE *memo;
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     memo = NEW_MEMO(Qundef, Qnil, 0);
     rb_block_call(obj, id_each, 0, 0, max_by_i, (VALUE)memo);
@@ -1575,7 +1593,7 @@ enum_minmax_by(VALUE obj)
     VALUE memo;
     struct minmax_by_t *m = NEW_MEMO_FOR(struct minmax_by_t, memo);
 
-    RETURN_ENUMERATOR(obj, 0, 0);
+    RETURN_SIZED_ENUMERATOR(obj, 0, 0, enum_size);
 
     m->min_bv = Qundef;
     m->max_bv = Qundef;
@@ -1656,7 +1674,7 @@ enum_each_with_index(int argc, VALUE *argv, VALUE obj)
 {
     NODE *memo;
 
-    RETURN_ENUMERATOR(obj, argc, argv);
+    RETURN_SIZED_ENUMERATOR(obj, argc, argv, enum_size);
 
     memo = NEW_MEMO(0, 0, 0);
     rb_block_call(obj, id_each, argc, argv, each_with_index_i, (VALUE)memo);
@@ -1688,7 +1706,7 @@ enum_reverse_each(int argc, VALUE *argv, VALUE obj)
     VALUE ary;
     long i;
 
-    RETURN_ENUMERATOR(obj, argc, argv);
+    RETURN_SIZED_ENUMERATOR(obj, argc, argv, enum_size);
 
     ary = enum_to_a(argc, argv, obj);
 
@@ -1740,7 +1758,7 @@ each_val_i(VALUE i, VALUE p, int argc, VALUE *argv)
 static VALUE
 enum_each_entry(int argc, VALUE *argv, VALUE obj)
 {
-    RETURN_ENUMERATOR(obj, argc, argv);
+    RETURN_SIZED_ENUMERATOR(obj, argc, argv, enum_size);
     rb_block_call(obj, id_each, argc, argv, each_val_i, 0);
     return obj;
 }
@@ -1762,6 +1780,20 @@ each_slice_i(VALUE i, VALUE m, int argc, VALUE *argv)
     }
 
     return v;
+}
+
+static VALUE
+enum_each_slice_size(VALUE obj, VALUE args)
+{
+    VALUE n, size;
+    long slice_size = NUM2LONG(RARRAY_PTR(args)[0]);
+    if (slice_size <= 0) rb_raise(rb_eArgError, "invalid slice size");
+
+    size = enum_size(obj, 0);
+    if (size == Qnil) return Qnil;
+
+    n = rb_funcall(size, '+', 1, LONG2NUM(slice_size-1));
+    return rb_funcall(n, id_div, 1, LONG2FIX(slice_size));
 }
 
 /*
@@ -1788,7 +1820,7 @@ enum_each_slice(VALUE obj, VALUE n)
     NODE *memo;
 
     if (size <= 0) rb_raise(rb_eArgError, "invalid slice size");
-    RETURN_ENUMERATOR(obj, 1, &n);
+    RETURN_SIZED_ENUMERATOR(obj, 1, &n, enum_each_slice_size);
     ary = rb_ary_new2(size);
     memo = NEW_MEMO(ary, 0, size);
     rb_block_call(obj, id_each, 0, 0, each_slice_i, (VALUE)memo);
@@ -1815,6 +1847,20 @@ each_cons_i(VALUE i, VALUE args, int argc, VALUE *argv)
 	v = rb_yield(rb_ary_dup(ary));
     }
     return v;
+}
+
+static VALUE
+enum_each_cons_size(VALUE obj, VALUE args)
+{
+    VALUE n, size;
+    long cons_size = NUM2LONG(RARRAY_PTR(args)[0]);
+    if (cons_size <= 0) rb_raise(rb_eArgError, "invalid size");
+
+    size = enum_size(obj, 0);
+    if (size == Qnil) return Qnil;
+
+    n = rb_funcall(size, '+', 1, LONG2NUM(1 - cons_size));
+    return (rb_cmpint(rb_funcall(n, id_cmp, 1, LONG2FIX(0)), n, LONG2FIX(0)) == -1) ? LONG2FIX(0) : n;
 }
 
 /*
@@ -1845,7 +1891,7 @@ enum_each_cons(VALUE obj, VALUE n)
     NODE *memo;
 
     if (size <= 0) rb_raise(rb_eArgError, "invalid size");
-    RETURN_ENUMERATOR(obj, 1, &n);
+    RETURN_SIZED_ENUMERATOR(obj, 1, &n, enum_each_cons_size);
     memo = NEW_MEMO(rb_ary_new2(size), 0, size);
     rb_block_call(obj, id_each, 0, 0, each_cons_i, (VALUE)memo);
 
@@ -1876,7 +1922,7 @@ each_with_object_i(VALUE i, VALUE memo, int argc, VALUE *argv)
 static VALUE
 enum_each_with_object(VALUE obj, VALUE memo)
 {
-    RETURN_ENUMERATOR(obj, 1, &memo);
+    RETURN_SIZED_ENUMERATOR(obj, 1, &memo, enum_size);
 
     rb_block_call(obj, id_each, 0, 0, each_with_object_i, memo);
 
@@ -2005,6 +2051,7 @@ enum_zip(int argc, VALUE *argv, VALUE obj)
     if (!allary) {
 	CONST_ID(conv, "to_enum");
 	for (i=0; i<argc; i++) {
+	    if (!rb_respond_to(argv[i], id_each)) Check_Type(argv[i], T_ARRAY);
 	    argv[i] = rb_funcall(argv[i], conv, 1, ID2SYM(id_each));
 	}
     }
@@ -2188,6 +2235,25 @@ cycle_i(VALUE i, VALUE ary, int argc, VALUE *argv)
     return Qnil;
 }
 
+#define enum_cycle_size rb_enum_cycle_size
+VALUE
+rb_enum_cycle_size(VALUE self, VALUE args)
+{
+    long mul;
+    VALUE n = Qnil;
+    VALUE size = enum_size(self, args);
+
+    if (size == Qnil) return Qnil;
+
+    if (args && (RARRAY_LEN(args) > 0)) {
+	n = RARRAY_PTR(args)[0];
+    }
+    if (n == Qnil) return DBL2NUM(INFINITY);
+    mul = NUM2LONG(n);
+    if (mul <= 0) return INT2FIX(0);
+    return rb_funcall(size, '*', 1, LONG2FIX(mul));
+}
+
 /*
  *  call-seq:
  *     enum.cycle(n=nil) { |obj| block }  ->  nil
@@ -2218,7 +2284,7 @@ enum_cycle(int argc, VALUE *argv, VALUE obj)
 
     rb_scan_args(argc, argv, "01", &nv);
 
-    RETURN_ENUMERATOR(obj, argc, argv);
+    RETURN_SIZED_ENUMERATOR(obj, argc, argv, enum_cycle_size);
     if (NIL_P(nv)) {
         n = -1;
     }
@@ -2258,9 +2324,9 @@ chunk_ii(VALUE i, VALUE _argp, int argc, VALUE *argv)
     ENUM_WANT_SVALUE();
 
     if (NIL_P(argp->state))
-        v = rb_funcall(argp->categorize, rb_intern("call"), 1, i);
+        v = rb_funcall(argp->categorize, id_call, 1, i);
     else
-        v = rb_funcall(argp->categorize, rb_intern("call"), 2, i, argp->state);
+        v = rb_funcall(argp->categorize, id_call, 2, i, argp->state);
 
     if (v == alone) {
         if (!NIL_P(argp->prev_value)) {
@@ -2456,9 +2522,9 @@ slicebefore_ii(VALUE i, VALUE _argp, int argc, VALUE *argv)
     if (!NIL_P(argp->sep_pat))
         header_p = rb_funcall(argp->sep_pat, id_eqq, 1, i);
     else if (NIL_P(argp->state))
-        header_p = rb_funcall(argp->sep_pred, rb_intern("call"), 1, i);
+        header_p = rb_funcall(argp->sep_pred, id_call, 1, i);
     else
-        header_p = rb_funcall(argp->sep_pred, rb_intern("call"), 2, i, argp->state);
+        header_p = rb_funcall(argp->sep_pred, id_call, 2, i, argp->state);
     if (RTEST(header_p)) {
         if (!NIL_P(argp->prev_elts))
             rb_funcall(argp->yielder, id_lshift, 1, argp->prev_elts);
@@ -2506,27 +2572,26 @@ slicebefore_i(VALUE yielder, VALUE enumerator, int argc, VALUE *argv)
  *
  *  Creates an enumerator for each chunked elements.
  *  The beginnings of chunks are defined by _pattern_ and the block.
- *  If _pattern_ === _elt_ returns true or
- *  the block returns true for the element,
- *  the element is beginning of a chunk.
- *
- *  The === and block is called from the first element to the last element
- *  of _enum_.
- *  The result for the first element is ignored.
- *
- *  The result enumerator yields the chunked elements as an array for +each+
- *  method.
- *  +each+ method can be called as follows.
+
+ *  If <code>_pattern_ === _elt_</code> returns <code>true</code> or the block
+ *  returns <code>true</code> for the element, the element is beginning of a
+ *  chunk.
+
+ *  The <code>===</code> and _block_ is called from the first element to the last
+ *  element of _enum_.  The result for the first element is ignored.
+
+ *  The result enumerator yields the chunked elements as an array.
+ *  So +each+ method can be called as follows:
  *
  *    enum.slice_before(pattern).each { |ary| ... }
  *    enum.slice_before { |elt| bool }.each { |ary| ... }
  *    enum.slice_before(initial_state) { |elt, state| bool }.each { |ary| ... }
  *
- *  Other methods of Enumerator class and Enumerable module,
+ *  Other methods of the Enumerator class and Enumerable module,
  *  such as map, etc., are also usable.
  *
  *  For example, iteration over ChangeLog entries can be implemented as
- *  follows.
+ *  follows:
  *
  *    # iterate over ChangeLog entries.
  *    open("ChangeLog") { |f|
@@ -2538,8 +2603,9 @@ slicebefore_i(VALUE yielder, VALUE enumerator, int argc, VALUE *argv)
  *      f.slice_before { |line| /\A\S/ === line }.each { |e| pp e }
  *    }
  *
- * "svn proplist -R" produces multiline output for each file.
- * They can be chunked as follows:
+ *
+ *  "svn proplist -R" produces multiline output for each file.
+ *  They can be chunked as follows:
  *
  *    IO.popen([{"LC_ALL"=>"C"}, "svn", "proplist", "-R"]) { |f|
  *      f.lines.slice_before(/\AProp/).each { |lines| p lines }
@@ -2567,15 +2633,14 @@ slicebefore_i(VALUE yielder, VALUE enumerator, int argc, VALUE *argv)
  *
  *  However local variables are not appropriate to maintain state
  *  if the result enumerator is used twice or more.
- *  In such case, the last state of the 1st +each+ is used in 2nd +each+.
- *  _initial_state_ argument can be used to avoid this problem.
+ *  In such a case, the last state of the 1st +each+ is used in the 2nd +each+.
+ *  The _initial_state_ argument can be used to avoid this problem.
  *  If non-nil value is given as _initial_state_,
- *  it is duplicated for each "each" method invocation of the enumerator.
+ *  it is duplicated for each +each+ method invocation of the enumerator.
  *  The duplicated object is passed to 2nd argument of the block for
  *  +slice_before+ method.
  *
- *    # word wrapping.
- *    # this assumes all characters have same width.
+ *    # Word wrapping.  This assumes all characters have same width.
  *    def wordwrap(words, maxwidth)
  *      # if cols is a local variable, 2nd "each" may start with non-zero cols.
  *      words.slice_before(cols: 0) { |w, h|
@@ -2603,8 +2668,8 @@ slicebefore_i(VALUE yielder, VALUE enumerator, int argc, VALUE *argv)
  *    #   20
  *    #   ----------
  *
- * mbox contains series of mails which start with Unix From line.
- * So each mail can be extracted by slice before Unix From line.
+ *  mbox contains series of mails which start with Unix From line.
+ *  So each mail can be extracted by slice before Unix From line.
  *
  *    # parse mbox
  *    open("mbox") { |f|
@@ -2728,4 +2793,7 @@ Init_Enumerable(void)
     rb_define_method(rb_mEnumerable, "slice_before", enum_slice_before, -1);
 
     id_next = rb_intern("next");
+    id_call = rb_intern("call");
+    id_size = rb_intern("size");
+    id_div = rb_intern("div");
 }

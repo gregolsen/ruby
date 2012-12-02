@@ -177,7 +177,7 @@ typedef unsigned int uintptr_t;
 #if SIZEOF_OFF_T == 8
 #define off_t __int64
 #define stat stati64
-#define fstat(fd,st)		fstati64(fd,st)
+#define fstat(fd,st)		_fstati64(fd,st)
 #if defined(__BORLANDC__)
 #define stati64(path, st) rb_w32_stati64(path, st)
 #elif !defined(_MSC_VER) || RT_VER < 80
@@ -764,7 +764,7 @@ uintptr_t rb_w32_asynchronize(asynchronous_func_t func, uintptr_t self, int argc
 }  /* extern "C" { */
 #endif
 
-#ifdef __MINGW64__
+#if defined(__MINGW64__)
 /*
  * Use powl() instead of broken pow() of x86_64-w64-mingw32.
  * This workaround will fix test failures in test_bignum.rb,
@@ -775,6 +775,24 @@ rb_w32_pow(double x, double y)
 {
     return powl(x, y);
 }
+#elif defined(__MINGW64_VERSION_MAJOR)
+/*
+ * Set floating point precision for pow() of mingw-w64 x86.
+ * With default precision the result is not proper on WinXP.
+ */
+static inline double
+rb_w32_pow(double x, double y)
+{
+    double r;
+    unsigned int default_control = _controlfp(0, 0);
+    _controlfp(_PC_64, _MCW_PC);
+    r = pow(x, y);
+    /* Restore setting */
+    _controlfp(default_control, _MCW_PC);
+    return r;
+}
+#endif
+#if defined(__MINGW64_VERSION_MAJOR) || defined(__MINGW64__)
 #define pow rb_w32_pow
 #endif
 

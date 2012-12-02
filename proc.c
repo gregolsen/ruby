@@ -17,6 +17,7 @@
 struct METHOD {
     VALUE recv;
     VALUE rclass;
+    VALUE defined_class;
     ID id;
     rb_method_entry_t *me;
     struct unlinked_method_entry_list_entry *ume;
@@ -309,10 +310,9 @@ binding_clone(VALUE self)
 }
 
 VALUE
-rb_binding_new(void)
+rb_binding_new_with_cfp(rb_thread_t *th, rb_control_frame_t *src_cfp)
 {
-    rb_thread_t *th = GET_THREAD();
-    rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(th, th->cfp);
+    rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(th, src_cfp);
     VALUE bindval = binding_alloc(rb_cBinding);
     rb_binding_t *bind;
 
@@ -325,6 +325,13 @@ rb_binding_new(void)
     bind->path = cfp->iseq->location.path;
     bind->first_lineno = rb_vm_get_sourceline(cfp);
     return bindval;
+}
+
+VALUE
+rb_binding_new(void)
+{
+    rb_thread_t *th = GET_THREAD();
+    return rb_binding_new_with_cfp(th, th->cfp);
 }
 
 /*
@@ -414,7 +421,6 @@ proc_new(VALUE klass, int is_lambda)
     }
 
     procval = rb_vm_make_proc(th, block, klass);
-    rb_vm_rewrite_ep_in_errinfo(th, cfp);
 
     if (is_lambda) {
 	rb_proc_t *proc;
@@ -557,8 +563,7 @@ proc_call(int argc, VALUE *argv, VALUE procval)
 	}
     }
 
-    vret = rb_vm_invoke_proc(GET_THREAD(), proc, proc->block.self,
-			     argc, argv, blockptr);
+    vret = rb_vm_invoke_proc(GET_THREAD(), proc, argc, argv, blockptr);
     RB_GC_GUARD(procval);
     return vret;
 }
@@ -583,7 +588,7 @@ rb_proc_call(VALUE self, VALUE args)
     VALUE vret;
     rb_proc_t *proc;
     GetProcPtr(self, proc);
-    vret = rb_vm_invoke_proc(GET_THREAD(), proc, proc->block.self,
+    vret = rb_vm_invoke_proc(GET_THREAD(), proc,
 			     check_argc(RARRAY_LEN(args)), RARRAY_PTR(args), 0);
     RB_GC_GUARD(self);
     RB_GC_GUARD(args);
@@ -604,8 +609,7 @@ rb_proc_call_with_block(VALUE self, int argc, VALUE *argv, VALUE pass_procval)
 	block = &pass_proc->block;
     }
 
-    vret = rb_vm_invoke_proc(GET_THREAD(), proc, proc->block.self,
-			     argc, argv, block);
+    vret = rb_vm_invoke_proc(GET_THREAD(), proc, argc, argv, block);
     RB_GC_GUARD(self);
     RB_GC_GUARD(pass_procval);
     return vret;
@@ -889,6 +893,7 @@ static void
 bm_mark(void *ptr)
 {
     struct METHOD *data = ptr;
+    rb_gc_mark(data->defined_class);
     rb_gc_mark(data->rclass);
     rb_gc_mark(data->recv);
     if (data->me) rb_mark_method_entry(data->me);
@@ -935,7 +940,7 @@ static VALUE
 mnew(VALUE klass, VALUE obj, ID id, VALUE mclass, int scope)
 {
     VALUE method;
-    VALUE rclass = klass;
+    VALUE rclass = klass, defined_class;
     ID rid = id;
     struct METHOD *data;
     rb_method_entry_t *me, meb;
@@ -943,7 +948,7 @@ mnew(VALUE klass, VALUE obj, ID id, VALUE mclass, int scope)
     rb_method_flag_t flag = NOEX_UNDEF;
 
   again:
-    me = rb_method_entry(klass, id);
+    me = rb_method_entry(klass, id, &defined_class);
     if (UNDEFINED_METHOD_ENTRY_P(me)) {
 	ID rmiss = rb_intern("respond_to_missing?");
 	VALUE sym = ID2SYM(id);
@@ -985,12 +990,12 @@ mnew(VALUE klass, VALUE obj, ID id, VALUE mclass, int scope)
 	}
     }
     if (def && def->type == VM_METHOD_TYPE_ZSUPER) {
-	klass = RCLASS_SUPER(me->klass);
+	klass = RCLASS_SUPER(defined_class);
 	id = def->original_id;
 	goto again;
     }
 
-    klass = me->klass;
+    klass = defined_class;
 
     while (rclass != klass &&
 	   (FL_TEST(rclass, FL_SINGLETON) || RB_TYPE_P(rclass, T_ICLASS))) {
@@ -1006,6 +1011,7 @@ mnew(VALUE klass, VALUE obj, ID id, VALUE mclass, int scope)
 
     data->recv = obj;
     data->rclass = rclass;
+    data->defined_class = defined_class;
     data->id = rid;
     data->me = ALLOC(rb_method_entry_t);
     *data->me = *me;
@@ -1119,6 +1125,7 @@ method_unbind(VALUE obj)
     *data->me = *orig->me;
     if (orig->me->def) orig->me->def->alias_count++;
     data->rclass = orig->rclass;
+    data->defined_class = orig->defined_class;
     data->ume = ALLOC(struct unlinked_method_entry_list_entry);
     OBJ_INFECT(method, obj);
 
@@ -1394,6 +1401,7 @@ rb_mod_define_method(int argc, VALUE *argv, VALUE mod)
 	    proc->block.iseq->klass = mod;
 	    proc->is_lambda = TRUE;
 	    proc->is_from_method = TRUE;
+	    proc->block.klass = mod;
 	}
 	rb_add_method(mod, id, VM_METHOD_TYPE_BMETHOD, (void *)body, noex);
     }
@@ -1439,9 +1447,45 @@ rb_obj_define_method(int argc, VALUE *argv, VALUE obj)
     return rb_mod_define_method(argc, argv, klass);
 }
 
+/*
+ *     define_method(symbol, method)     -> new_method
+ *     define_method(symbol) { block }   -> proc
+ *
+ *  Defines a global function by _method_ or the block.
+ */
+
+static VALUE
+top_define_method(int argc, VALUE *argv, VALUE obj)
+{
+    rb_thread_t *th = GET_THREAD();
+    VALUE klass;
+
+    rb_secure(4);
+    klass = th->top_wrapper;
+    if (klass) {
+	rb_warning("main.define_method in the wrapped load is effective only in wrapper module");
+    }
+    else {
+	klass = rb_cObject;
+    }
+    return rb_mod_define_method(argc, argv, klass);
+}
 
 /*
- * MISSING: documentation
+ *  call-seq:
+ *    method.clone -> new_method
+ *
+ *  Returns a clone of this method.
+ *
+ *    class A
+ *      def foo
+ *        return "bar"
+ *      end
+ *    end
+ *
+ *    m = A.new.method(:foo)
+ *    m.call # => "bar"
+ *    n = m.clone.call # => "bar"
  */
 
 static VALUE
@@ -1498,7 +1542,7 @@ rb_method_call(int argc, VALUE *argv, VALUE method)
 	rb_thread_t *th = GET_THREAD();
 
 	PASS_PASSED_BLOCK_TH(th);
-	result = rb_vm_call(th, data->recv, data->id,  argc, argv, data->me);
+	result = rb_vm_call(th, data->recv, data->id,  argc, argv, data->me, data->defined_class);
     }
     POP_TAG();
     if (safe >= 0)
@@ -1635,6 +1679,7 @@ rb_method_entry_arity(const rb_method_entry_t *me)
     const rb_method_definition_t *def = me->def;
     if (!def) return 0;
     switch (def->type) {
+      case VM_METHOD_TYPE_CFUNC_FRAMELESS:
       case VM_METHOD_TYPE_CFUNC:
 	if (def->body.cfunc.argc < 0)
 	    return -1;
@@ -1727,7 +1772,7 @@ method_arity(VALUE method)
 int
 rb_mod_method_arity(VALUE mod, ID id)
 {
-    rb_method_entry_t *me = rb_method_entry(mod, id);
+    rb_method_entry_t *me = rb_method_entry(mod, id, 0);
     return rb_method_entry_arity(me);
 }
 
@@ -2200,6 +2245,7 @@ Init_Proc(void)
     rb_define_method(rb_cProc, "eql?", proc_eq, 1);
     rb_define_method(rb_cProc, "hash", proc_hash, 0);
     rb_define_method(rb_cProc, "to_s", proc_to_s, 0);
+    rb_define_alias(rb_cProc, "inspect", "to_s");
     rb_define_method(rb_cProc, "lambda?", rb_proc_lambda_p, 0);
     rb_define_method(rb_cProc, "binding", proc_binding, 0);
     rb_define_method(rb_cProc, "curry", proc_curry, -1);
@@ -2267,6 +2313,8 @@ Init_Proc(void)
 
     /* Kernel */
     rb_define_method(rb_mKernel, "define_singleton_method", rb_obj_define_method, -1);
+
+    rb_define_singleton_method(rb_vm_top_self(), "define_method", top_define_method, -1);
 }
 
 /*

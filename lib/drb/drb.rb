@@ -1010,8 +1010,8 @@ module DRb
 
     def self.new_with(uri, ref)
       it = self.allocate
-      it.instance_variable_set('@uri', uri)
-      it.instance_variable_set('@ref', ref)
+      it.instance_variable_set(:@uri, uri)
+      it.instance_variable_set(:@ref, ref)
       it
     end
 
@@ -1382,7 +1382,7 @@ module DRb
     def alive?
       @thread.alive?
     end
-    
+
     def here?(uri)
       @exported_uri.include?(uri)
     end

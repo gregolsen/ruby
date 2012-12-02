@@ -97,6 +97,18 @@ rb_memcmp(const void *p1, const void *p2, long len)
     return memcmp(p1, p2, len);
 }
 
+#ifdef HAVE_MEMMEM
+static inline long
+rb_memsearch_ss(const unsigned char *xs, long m, const unsigned char *ys, long n)
+{
+    const unsigned char *y;
+
+    if (y = memmem(ys, n, xs, m))
+	return y - ys;
+    else
+	return -1;
+}
+#else
 static inline long
 rb_memsearch_ss(const unsigned char *xs, long m, const unsigned char *ys, long n)
 {
@@ -113,6 +125,9 @@ rb_memsearch_ss(const unsigned char *xs, long m, const unsigned char *ys, long n
 
     if (m > SIZEOF_VALUE)
 	rb_bug("!!too long pattern string!!");
+
+    if (!(y = memchr(y, *x, n - m + 1)))
+	return -1;
 
     /* Prepare hash value */
     for (hx = *x++, hy = *y++; x < xe; ++x, ++y) {
@@ -132,6 +147,7 @@ rb_memsearch_ss(const unsigned char *xs, long m, const unsigned char *ys, long n
     }
     return y - ys - m;
 }
+#endif
 
 static inline long
 rb_memsearch_qs(const unsigned char *xs, long m, const unsigned char *ys, long n)
@@ -220,12 +236,12 @@ rb_memsearch(const void *x0, long m, const void *y0, long n, rb_encoding *enc)
 	return 0;
     }
     else if (m == 1) {
-	const unsigned char *ys = y, *ye = ys + n;
-	for (; y < ye; ++y) {
-	    if (*x == *y)
-		return y - ys;
-	}
-	return -1;
+	const unsigned char *ys;
+
+	if (ys = memchr(y, *x, n))
+	    return ys - y;
+	else
+	    return -1;
     }
     else if (m <= SIZEOF_VALUE) {
 	return rb_memsearch_ss(x0, m, y0, n);
@@ -826,8 +842,7 @@ VALUE rb_cMatch;
 static VALUE
 match_alloc(VALUE klass)
 {
-    NEWOBJ(match, struct RMatch);
-    OBJSETUP(match, klass, T_MATCH);
+    NEWOBJ_OF(match, struct RMatch, klass, T_MATCH);
 
     match->str = 0;
     match->rmatch = 0;
@@ -2453,8 +2468,7 @@ rb_reg_initialize_str(VALUE obj, VALUE str, int options, onig_errmsg_buffer err,
 static VALUE
 rb_reg_s_alloc(VALUE klass)
 {
-    NEWOBJ(re, struct RRegexp);
-    OBJSETUP(re, klass, T_REGEXP);
+    NEWOBJ_OF(re, struct RRegexp, klass, T_REGEXP);
 
     re->ptr = 0;
     re->src = 0;
@@ -2877,20 +2891,21 @@ rb_reg_match_m(int argc, VALUE *argv, VALUE re)
  *     Regexp.compile(string, [options [, lang]])    -> regexp
  *     Regexp.compile(regexp)                        -> regexp
  *
- *  Constructs a new regular expression from <i>pattern</i>, which can be either
- *  a <code>String</code> or a <code>Regexp</code> (in which case that regexp's
- *  options are propagated, and new options may not be specified (a change as of
- *  Ruby 1.8). If <i>options</i> is a <code>Fixnum</code>, it should be one or
- *  more of the constants <code>Regexp::EXTENDED</code>,
- *  <code>Regexp::IGNORECASE</code>, and <code>Regexp::MULTILINE</code>,
- *  <em>or</em>-ed together. Otherwise, if <i>options</i> is not
- *  <code>nil</code>, the regexp will be case insensitive.
- *  When the <i>lang</i> parameter is `n' or `N' sets the regexp no encoding.
+ *  Constructs a new regular expression from +pattern+, which can be either a
+ *  String or a Regexp (in which case that regexp's options are propagated),
+ *  and new options may not be specified (a change as of Ruby 1.8).
  *
- *     r1 = Regexp.new('^a-z+:\\s+\w+')           #=> /^a-z+:\s+\w+/
- *     r2 = Regexp.new('cat', true)               #=> /cat/i
- *     r3 = Regexp.new('dog', Regexp::EXTENDED)   #=> /dog/x
- *     r4 = Regexp.new(r2)                        #=> /cat/i
+ *  If +options+ is a Fixnum, it should be one or more of the constants
+ *  Regexp::EXTENDED, Regexp::IGNORECASE, and Regexp::MULTILINE,
+ *  <em>or</em>-ed together.  Otherwise, if +options+ is not
+ *  +nil+ or +false+, the regexp will be case insensitive.
+ *
+ *  When the +lang+ parameter is `n' or `N' sets the regexp no encoding.
+ *
+ *    r1 = Regexp.new('^a-z+:\\s+\w+') #=> /^a-z+:\s+\w+/
+ *    r2 = Regexp.new('cat', true)     #=> /cat/i
+ *    r3 = Regexp.new(r2)              #=> /cat/i
+ *    r4 = Regexp.new('dog', Regexp::EXTENDED | Regexp::IGNORECASE) #=> /dog/ix
  */
 
 static VALUE

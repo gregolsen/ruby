@@ -52,6 +52,14 @@
 char *getenv();
 #endif
 
+#define numberof(array) (int)(sizeof(array) / sizeof((array)[0]))
+
+#if defined DISABLE_RUBYGEMS && DISABLE_RUBYGEMS
+#define DEFAULT_RUBYGEMS_ENABLED "disabled"
+#else
+#define DEFAULT_RUBYGEMS_ENABLED "enabled"
+#endif
+
 #define DISABLE_BIT(bit) (1U << disable_##bit)
 enum disable_flag_bits {
     disable_gems,
@@ -62,8 +70,10 @@ enum disable_flag_bits {
 #define DUMP_BIT(bit) (1U << dump_##bit)
 enum dump_flag_bits {
     dump_version,
+    dump_version_v,
     dump_copyright,
     dump_usage,
+    dump_help,
     dump_yydebug,
     dump_syntax,
     dump_parsetree,
@@ -122,42 +132,78 @@ static struct {
 } origarg;
 
 static void
-usage(const char *name)
+usage(const char *name, int help)
 {
     /* This message really ought to be max 23 lines.
      * Removed -h because the user already knows that option. Others? */
 
-    static const char *const usage_msg[] = {
-	"-0[octal]       specify record separator (\\0, if no argument)",
-	"-a              autosplit mode with -n or -p (splits $_ into $F)",
-	"-c              check syntax only",
-	"-Cdirectory     cd to directory, before executing your script",
-	"-d              set debugging flags (set $DEBUG to true)",
-	"-e 'command'    one line of script. Several -e's allowed. Omit [programfile]",
-	"-Eex[:in]       specify the default external and internal character encodings",
-	"-Fpattern       split() pattern for autosplit (-a)",
-	"-i[extension]   edit ARGV files in place (make backup if extension supplied)",
-	"-Idirectory     specify $LOAD_PATH directory (may be used more than once)",
-	"-l              enable line ending processing",
-	"-n              assume 'while gets(); ... end' loop around your script",
-	"-p              assume loop like -n but print line also like sed",
-	"-rlibrary       require the library, before executing your script",
-	"-s              enable some switch parsing for switches after script name",
-	"-S              look for the script using PATH environment variable",
-	"-T[level=1]     turn on tainting checks",
-	"-v              print version number, then turn on verbose mode",
-	"-w              turn warnings on for your script",
-	"-W[level=2]     set warning level; 0=silence, 1=medium, 2=verbose",
-	"-x[directory]   strip off text before #!ruby line and perhaps cd to directory",
-	"--copyright     print the copyright",
-	"--version       print the version",
-	NULL
+    struct message {
+	const char *str;
+	unsigned short namelen, secondlen;
     };
-    const char *const *p = usage_msg;
+#define M(shortopt, longopt, desc) { \
+    shortopt " " longopt " " desc, \
+    (unsigned short)sizeof(shortopt), \
+    (unsigned short)sizeof(longopt), \
+}
+    static const struct message usage_msg[] = {
+	M("-0[octal]",	   "",			   "specify record separator (\\0, if no argument)"),
+	M("-a",		   "",			   "autosplit mode with -n or -p (splits $_ into $F)"),
+	M("-c",		   "",			   "check syntax only"),
+	M("-Cdirectory",   "",			   "cd to directory before executing your script"),
+	M("-d",		   ", --debug",		   "set debugging flags (set $DEBUG to true)"),
+	M("-e 'command'",  "",			   "one line of script. Several -e's allowed. Omit [programfile]"),
+	M("-Eex[:in]",     ", --encoding=ex[:in]", "specify the default external and internal character encodings"),
+	M("-Fpattern",	   "",			   "split() pattern for autosplit (-a)"),
+	M("-i[extension]", "",			   "edit ARGV files in place (make backup if extension supplied)"),
+	M("-Idirectory",   "",			   "specify $LOAD_PATH directory (may be used more than once)"),
+	M("-l",		   "",			   "enable line ending processing"),
+	M("-n",		   "",			   "assume 'while gets(); ... end' loop around your script"),
+	M("-p",		   "",			   "assume loop like -n but print line also like sed"),
+	M("-rlibrary",	   "",			   "require the library before executing your script"),
+	M("-s",		   "",			   "enable some switch parsing for switches after script name"),
+	M("-S",		   "",			   "look for the script using PATH environment variable"),
+	M("-T[level=1]",   "",			   "turn on tainting checks"),
+	M("-v",		   ", --verbose",	   "print version number, then turn on verbose mode"),
+	M("-w",		   "",			   "turn warnings on for your script"),
+	M("-W[level=2]",   "",			   "set warning level; 0=silence, 1=medium, 2=verbose"),
+	M("-x[directory]", "",			   "strip off text before #!ruby line and perhaps cd to directory"),
+	M("-h",		   "",			   "show this message, --help for more info"),
+    };
+    static const struct message help_msg[] = {
+	M("--copyright",                   "", "print the copyright"),
+	M("--enable=feature[,...]",	   ", --disable=feature[,...]",
+	  "enable or disable features"),
+	M("--internal-encoding=encoding",  ", --external-encoding=encoding",
+	  "specify the default internal and external character encoding"),
+	M("--version",                     "", "print the version"),
+	M("--help",			   "", "show this message, -h for short message"),
+    };
+    static const struct message features[] = {
+	M("gems",    "",        "rubygems (default: "DEFAULT_RUBYGEMS_ENABLED")"),
+	M("rubyopt", "",        "RUBYOPT environment variable (default: enabled)"),
+    };
+    int i, w = 16, num = numberof(usage_msg) - (help ? 1 : 0);
+#define SHOW(m) do { \
+	int wrap = help && (m).namelen + (m).secondlen - 2 > w; \
+	printf("  %.*s%-*.*s%-*s%s\n", (m).namelen-1, (m).str, \
+	       (wrap ? 0 : w - (m).namelen + 1), \
+	       (help ? (m).secondlen-1 : 0), (m).str + (m).namelen, \
+	       (wrap ? w + 3 : 0), (wrap ? "\n" : ""), \
+	       (m).str + (m).namelen + (m).secondlen); \
+    } while (0)
 
     printf("Usage: %s [switches] [--] [programfile] [arguments]\n", name);
-    while (*p)
-	printf("  %s\n", *p++);
+    for (i = 0; i < num; ++i)
+	SHOW(usage_msg[i]);
+
+    if (!help) return;
+
+    for (i = 0; i < numberof(help_msg); ++i)
+	SHOW(help_msg[i]);
+    puts("Features:");
+    for (i = 0; i < numberof(features); ++i)
+	SHOW(features[i]);
 }
 
 #ifdef MANGLED_PATH
@@ -410,9 +456,21 @@ ruby_init_loadpath_safe(int safe_level)
 #endif
     p = strrchr(libpath, '/');
     if (p) {
+	static const char bindir[] = "/bin";
+#ifdef LIBDIR_BASENAME
+	static const char libdir[] = "/"LIBDIR_BASENAME;
+#else
+	static const char libdir[] = "/lib";
+#endif
+	const ptrdiff_t bindir_len = (ptrdiff_t)sizeof(bindir) - 1;
+	const ptrdiff_t libdir_len = (ptrdiff_t)sizeof(libdir) - 1;
 	*p = 0;
-	if (p - libpath > 3 && !(STRCASECMP(p - 4, "/bin") && strcmp(p - 4, "/lib"))) {
-	    p -= 4;
+	if (p - libpath >= bindir_len && !STRCASECMP(p - bindir_len, bindir)) {
+	    p -= bindir_len;
+	    *p = 0;
+	}
+	else if (p - libpath >= libdir_len && !strcmp(p - libdir_len, libdir)) {
+	    p -= libdir_len;
 	    *p = 0;
 	}
     }
@@ -464,12 +522,15 @@ static void
 add_modules(VALUE *req_list, const char *mod)
 {
     VALUE list = *req_list;
+    VALUE feature;
 
     if (!list) {
 	*req_list = list = rb_ary_new();
 	RBASIC(list)->klass = 0;
     }
-    rb_ary_push(list, rb_obj_freeze(rb_str_new2(mod)));
+    feature = rb_str_new2(mod);
+    RBASIC(feature)->klass = 0;
+    rb_ary_push(list, feature);
 }
 
 static void
@@ -479,6 +540,7 @@ require_libraries(VALUE *req_list)
     VALUE self = rb_vm_top_self();
     ID require;
     rb_thread_t *th = GET_THREAD();
+    rb_encoding *extenc = rb_default_external_encoding();
     int prev_parse_in_eval = th->parse_in_eval;
     th->parse_in_eval = 0;
 
@@ -486,6 +548,9 @@ require_libraries(VALUE *req_list)
     CONST_ID(require, "require");
     while (list && RARRAY_LEN(list) > 0) {
 	VALUE feature = rb_ary_shift(list);
+	rb_enc_associate(feature, extenc);
+	RBASIC(feature)->klass = rb_cString;
+	OBJ_FREEZE(feature);
 	rb_funcall2(self, require, 1, &feature);
     }
     *req_list = 0;
@@ -666,6 +731,7 @@ dump_option(const char *str, int len, void *arg)
     SET_WHEN_DUMP(version);
     SET_WHEN_DUMP(copyright);
     SET_WHEN_DUMP(usage);
+    SET_WHEN_DUMP(help);
     SET_WHEN_DUMP(yydebug);
     SET_WHEN_DUMP(syntax);
     SET_WHEN_DUMP(parsetree);
@@ -709,7 +775,7 @@ proc_options(long argc, char **argv, struct cmdline_options *opt, int envopt)
 
     for (argc--, argv++; argc > 0; argc--, argv++) {
 	const char *const arg = argv[0];
-	if (arg[0] != '-' || !arg[1])
+	if (!arg || arg[0] != '-' || !arg[1])
 	    break;
 
 	s = arg + 1;
@@ -748,7 +814,7 @@ proc_options(long argc, char **argv, struct cmdline_options *opt, int envopt)
 		s++;
 		goto reswitch;
 	    }
-	    ruby_show_version();
+	    opt->dump |= DUMP_BIT(version_v);
 	    opt->verbose = 1;
 	  case 'w':
 	    ruby_verbose = Qtrue;
@@ -1050,7 +1116,7 @@ proc_options(long argc, char **argv, struct cmdline_options *opt, int envopt)
 	    }
 	    else if (strcmp("help", s) == 0) {
 		if (envopt) goto noenvopt_long;
-		opt->dump |= DUMP_BIT(usage);
+		opt->dump |= DUMP_BIT(help);
 		goto switch_end;
 	    }
 	    else {
@@ -1166,7 +1232,7 @@ uscore_get(void)
 static VALUE
 rb_f_sub(int argc, VALUE *argv)
 {
-    VALUE str = rb_funcall3(uscore_get(), rb_intern("sub"), argc, argv);
+    VALUE str = rb_funcall_passing_block(uscore_get(), rb_intern("sub"), argc, argv);
     rb_lastline_set(str);
     return str;
 }
@@ -1185,7 +1251,7 @@ rb_f_sub(int argc, VALUE *argv)
 static VALUE
 rb_f_gsub(int argc, VALUE *argv)
 {
-    VALUE str = rb_funcall3(uscore_get(), rb_intern("gsub"), argc, argv);
+    VALUE str = rb_funcall_passing_block(uscore_get(), rb_intern("gsub"), argc, argv);
     rb_lastline_set(str);
     return str;
 }
@@ -1203,7 +1269,7 @@ rb_f_gsub(int argc, VALUE *argv)
 static VALUE
 rb_f_chop(void)
 {
-    VALUE str = rb_funcall3(uscore_get(), rb_intern("chop"), 0, 0);
+    VALUE str = rb_funcall_passing_block(uscore_get(), rb_intern("chop"), 0, 0);
     rb_lastline_set(str);
     return str;
 }
@@ -1223,7 +1289,7 @@ rb_f_chop(void)
 static VALUE
 rb_f_chomp(int argc, VALUE *argv)
 {
-    VALUE str = rb_funcall3(uscore_get(), rb_intern("chomp"), argc, argv);
+    VALUE str = rb_funcall_passing_block(uscore_get(), rb_intern("chomp"), argc, argv);
     rb_lastline_set(str);
     return str;
 }
@@ -1247,8 +1313,8 @@ process_options(int argc, char **argv, struct cmdline_options *opt)
     argc -= i;
     argv += i;
 
-    if (opt->dump & DUMP_BIT(usage)) {
-	usage(origarg.argv[0]);
+    if (opt->dump & (DUMP_BIT(usage)|DUMP_BIT(help))) {
+	usage(origarg.argv[0], (opt->dump & DUMP_BIT(help)));
 	return Qtrue;
     }
 
@@ -1271,9 +1337,9 @@ process_options(int argc, char **argv, struct cmdline_options *opt)
     if (opt->src.enc.name)
 	rb_warning("-K is specified; it is for 1.8 compatibility and may cause odd behavior");
 
-    if (opt->dump & DUMP_BIT(version)) {
+    if (opt->dump & (DUMP_BIT(version) | DUMP_BIT(version_v))) {
 	ruby_show_version();
-	return Qtrue;
+	if (opt->dump & DUMP_BIT(version)) return Qtrue;
     }
     if (opt->dump & DUMP_BIT(copyright)) {
 	ruby_show_copyright();
@@ -1292,7 +1358,7 @@ process_options(int argc, char **argv, struct cmdline_options *opt)
 	}
 	else {
 	    opt->script = argv[0];
-	    if (opt->script[0] == '\0') {
+	    if (!opt->script || opt->script[0] == '\0') {
 		opt->script = "-";
 	    }
 	    else if (opt->do_search) {
@@ -1357,7 +1423,8 @@ process_options(int argc, char **argv, struct cmdline_options *opt)
 	long i;
 	VALUE load_path = GET_VM()->load_path;
 	for (i = 0; i < RARRAY_LEN(load_path); ++i) {
-	    rb_enc_associate(RARRAY_PTR(load_path)[i], lenc);
+	    RARRAY_PTR(load_path)[i] =
+		rb_enc_associate(rb_str_dup(RARRAY_PTR(load_path)[i]), lenc);
 	}
     }
     if (!(opt->disable & DISABLE_BIT(gems))) {
@@ -1630,7 +1697,7 @@ load_file_internal(VALUE arg)
 	enc = rb_locale_encoding();
     }
     else {
-	enc = rb_usascii_encoding();
+	enc = rb_utf8_encoding();
     }
     if (NIL_P(f)) {
 	f = rb_str_new(0, 0);
@@ -1829,8 +1896,9 @@ ruby_process_options(int argc, char **argv)
 {
     struct cmdline_options opt;
     VALUE iseq;
+    const char *script_name = (argc > 0 && argv[0]) ? argv[0] : "ruby";
 
-    ruby_script(argv[0]);  /* for the time being */
+    ruby_script(script_name);  /* for the time being */
     rb_argv0 = rb_str_new4(rb_progname);
     rb_gc_register_mark_object(rb_argv0);
     iseq = process_options(argc, argv, cmdline_options_init(&opt));

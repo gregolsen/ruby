@@ -84,6 +84,17 @@ class TestDefined < Test::Unit::TestCase
     assert_equal 'global-variable', defined?($+)
     assert_equal 'global-variable', defined?($1)
     assert_equal nil, defined?($2)
+
+    assert_equal("nil", defined?(nil))
+    assert_equal("true", defined?(true))
+    assert_equal("false", defined?(false))
+    assert_equal("expression", defined?(1))
+  end
+
+  def test_defined_impl_specific
+    feature7035 = '[ruby-core:47558]' # not spec
+    assert_predicate(defined?(Foo), :frozen?, feature7035)
+    assert_same(defined?(Foo), defined?(Array), feature7035)
   end
 
   class TestAutoloadedSuperclass
@@ -151,5 +162,23 @@ class TestDefined < Test::Unit::TestCase
     aa.def_f!
     assert_equal("super", aa.f, bug6644)
     assert_nil(a.f, bug6644)
+  end
+
+  def test_super_in_included_method
+    c0 = Class.new do
+      def m
+      end
+    end
+    m1 = Module.new do
+      def m
+        defined?(super)
+      end
+    end
+    c = Class.new(c0) do include m1
+      def m
+        super
+      end
+    end
+    assert_equal("super", c.new.m)
   end
 end

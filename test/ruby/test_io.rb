@@ -1,3 +1,4 @@
+# coding: US-ASCII
 require 'test/unit'
 require 'tmpdir'
 require "fcntl"
@@ -1713,6 +1714,93 @@ End
     }
   end
 
+  def test_reopen_mode
+    feature7067 = '[ruby-core:47694]'
+    make_tempfile {|t|
+      open(__FILE__) do |f|
+        assert_nothing_raised {
+          f.reopen(t.path, "r")
+          assert_equal("foo\n", f.gets)
+        }
+      end
+
+      open(__FILE__) do |f|
+        assert_nothing_raised(feature7067) {
+          f.reopen(t.path, File::RDONLY)
+          assert_equal("foo\n", f.gets)
+        }
+      end
+    }
+  end
+
+  def test_reopen_opt
+    feature7103 = '[ruby-core:47806]'
+    make_tempfile {|t|
+      open(__FILE__) do |f|
+        assert_nothing_raised(feature7103) {
+          f.reopen(t.path, "r", binmode: true)
+        }
+        assert_equal("foo\n", f.gets)
+      end
+
+      open(__FILE__) do |f|
+        assert_nothing_raised(feature7103) {
+          f.reopen(t.path, autoclose: false)
+        }
+        assert_equal("foo\n", f.gets)
+      end
+    }
+  end
+
+  def make_tempfile_for_encoding
+    t = make_tempfile
+    open(t.path, "rb+:utf-8") {|f| f.puts "\u7d05\u7389bar\n"}
+    if block_given?
+      yield t
+    else
+      t
+    end
+  ensure
+    t.close(true) if t and block_given?
+  end
+
+  def test_reopen_encoding
+    make_tempfile_for_encoding {|t|
+      open(__FILE__) {|f|
+        f.reopen(t.path, "r:utf-8")
+        s = f.gets
+        assert_equal(Encoding::UTF_8, s.encoding)
+        assert_equal("\u7d05\u7389bar\n", s)
+      }
+
+      open(__FILE__) {|f|
+        f.reopen(t.path, "r:UTF-8:EUC-JP")
+        s = f.gets
+        assert_equal(Encoding::EUC_JP, s.encoding)
+        assert_equal("\xB9\xC8\xB6\xCCbar\n".force_encoding(Encoding::EUC_JP), s)
+      }
+    }
+  end
+
+  def test_reopen_opt_encoding
+    feature7103 = '[ruby-core:47806]'
+    make_tempfile_for_encoding {|t|
+      open(__FILE__) {|f|
+        assert_nothing_raised(feature7103) {f.reopen(t.path, encoding: "ASCII-8BIT")}
+        s = f.gets
+        assert_equal(Encoding::ASCII_8BIT, s.encoding)
+        assert_equal("\xe7\xb4\x85\xe7\x8e\x89bar\n", s)
+      }
+
+      open(__FILE__) {|f|
+        assert_nothing_raised(feature7103) {f.reopen(t.path, encoding: "UTF-8:EUC-JP")}
+        s = f.gets
+        assert_equal(Encoding::EUC_JP, s.encoding)
+        assert_equal("\xB9\xC8\xB6\xCCbar\n".force_encoding(Encoding::EUC_JP), s)
+      }
+    }
+  end
+
   def test_foreach
     a = []
     IO.foreach("|" + EnvUtil.rubybin + " -e 'puts :foo; puts :bar; puts :baz'") {|x| a << x }
@@ -2341,9 +2429,9 @@ End
 
   def test_ioctl_linux2
     return if /linux/ !~ RUBY_PLATFORM
-    return if /^i?86|^x86_64/ !~ RUBY_PLATFORM
-    return if File.exist?('/dev/tty')
+    return if /^i.?86|^x86_64/ !~ RUBY_PLATFORM
 
+    return unless system('tty', '-s') # stdin is not a terminal
     File.open('/dev/tty') { |f|
       tiocgwinsz=0x5413
       winsize=""
@@ -2436,4 +2524,64 @@ End
     assert_equal(data, buf, bug6099)
   rescue RuntimeError # can't modify string; temporarily locked
   end
+
+  def test_advise_pipe
+    # we don't know if other platforms have a real posix_fadvise()
+    return if /linux/ !~ RUBY_PLATFORM
+    with_pipe do |r,w|
+      # Linux 2.6.15 and earlier returned EINVAL instead of ESPIPE
+      assert_raise(Errno::ESPIPE, Errno::EINVAL) { r.advise(:willneed) }
+      assert_raise(Errno::ESPIPE, Errno::EINVAL) { w.advise(:willneed) }
+    end
+  end
+
+  def assert_buffer_not_raise_shared_string_error
+    bug6764 = '[ruby-core:46586]'
+    size = 28
+    data = [*"a".."z", *"A".."Z"].shuffle.join("")
+    t = Tempfile.new("test_io")
+    t.write(data)
+    t.close
+    w = Tempfile.new("test_io")
+    assert_nothing_raised(RuntimeError, bug6764) do
+      File.open(t.path, "r") do |r|
+        buf = ''
+        while yield(r, size, buf)
+          w << buf
+        end
+      end
+    end
+    w.close
+    assert_equal(data, w.open.read, bug6764)
+  ensure
+    t.close!
+    w.close!
+  end
+
+  def test_read_buffer_not_raise_shared_string_error
+    assert_buffer_not_raise_shared_string_error do |r, size, buf|
+      r.read(size, buf)
+    end
+  end
+
+  def test_sysread_buffer_not_raise_shared_string_error
+    assert_buffer_not_raise_shared_string_error do |r, size, buf|
+      begin
+        r.sysread(size, buf)
+      rescue EOFError
+        nil
+      end
+    end
+  end
+
+  def test_readpartial_buffer_not_raise_shared_string_error
+    assert_buffer_not_raise_shared_string_error do |r, size, buf|
+      begin
+        r.readpartial(size, buf)
+      rescue EOFError
+        nil
+      end
+    end
+  end
 end
+

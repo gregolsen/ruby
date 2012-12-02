@@ -24,6 +24,14 @@ module Rake
     def load_rakefile(path)
       load(path)
     end
+
+    # Add files to the rakelib list
+    def add_rakelib(*files)
+      application.options.rakelib ||= []
+      files.each do |file|
+        application.options.rakelib << file
+      end
+    end
   end
 
 end

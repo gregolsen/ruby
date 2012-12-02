@@ -227,9 +227,11 @@ def install_recursive(srcdir, dest, options = {})
       Dir.foreach(file) do |f|
         src = File.join(file, f)
         d = File.join(dest, dir = src[subpath])
-        stat = File.stat(src) rescue next
+        stat = File.lstat(src) rescue next
         if stat.directory?
           files << [src, d, true] if /\A\./ !~ f and !prune[dir]
+        elsif stat.symlink?
+          # skip
         else
           files << [src, d, false] if File.fnmatch?(glob, f) and !skip[f]
         end
@@ -497,7 +499,7 @@ end
 
 install?(:local, :comm, :lib) do
   prepare "library scripts", rubylibdir
-  noinst = %w[README* *.txt *.rdoc]
+  noinst = %w[README* *.txt *.rdoc *.gemspec]
   install_recursive(File.join(srcdir, "lib"), rubylibdir, :no_install => noinst, :mode => $data_mode)
 end
 

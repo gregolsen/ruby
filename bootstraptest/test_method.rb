@@ -1184,3 +1184,81 @@ assert_equal 'ok', %q{
   'ok'
 }, '[ruby-core:30534]'
 
+# should not cache when splat
+assert_equal 'ok', %q{
+  class C
+    attr_reader :a
+    def initialize
+      @a = 1
+    end
+  end
+
+  def m *args
+    C.new.a(*args)
+  end
+
+  m()
+  begin
+    m(1)
+  rescue ArgumentError
+    'ok'
+  end
+}
+
+assert_equal 'DC', %q{
+  $result = []
+
+  class C
+    def foo *args
+      $result << 'C'
+    end
+  end
+  class D
+    def foo *args
+      $result << 'D'
+    end
+  end
+
+  o1 = $o1 = C.new
+  o2 = $o2 = D.new
+
+  args = Object.new
+  def args.to_a
+    test1 $o2, nil
+    []
+  end
+  def test1 o, args
+    o.foo(*args)
+  end
+  test1 o1, args
+  $result.join
+}
+
+assert_equal 'DC', %q{
+  $result = []
+
+  class C
+    def foo *args
+      $result << 'C'
+    end
+  end
+  class D
+    def foo *args
+      $result << 'D'
+    end
+  end
+
+  o1 = $o1 = C.new
+  o2 = $o2 = D.new
+
+  block = Object.new
+  def block.to_proc
+    test2 $o2, %w(a, b, c), nil
+    Proc.new{}
+  end
+  def test2 o, args, block
+    o.foo(*args, &block)
+  end
+  test2 o1, [], block
+  $result.join
+}

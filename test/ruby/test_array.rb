@@ -1,3 +1,4 @@
+# coding: US-ASCII
 require 'test/unit'
 require_relative 'envutil'
 
@@ -425,6 +426,18 @@ class TestArray < Test::Unit::TestCase
     a = @cls[1, 2, 3]
     a[-1, 0] = a
     assert_equal([1, 2, 1, 2, 3, 3], a)
+
+    a = @cls[]
+    a[5,0] = [5]
+    assert_equal([nil, nil, nil, nil, nil, 5], a)
+
+    a = @cls[1]
+    a[1,0] = [2]
+    assert_equal([1, 2], a)
+
+    a = @cls[1]
+    a[1,1] = [2]
+    assert_equal([1, 2], a)
   end
 
   def test_assoc
@@ -1890,7 +1903,7 @@ class TestArray < Test::Unit::TestCase
 
     ary = Object.new
     def ary.to_a;   [1, 2]; end
-    assert_raise(NoMethodError){ %w(a b).zip(ary) }
+    assert_raise(TypeError, NoMethodError) {%w(a b).zip(ary)}
     def ary.each; [3, 4].each{|e|yield e}; end
     assert_equal([['a', 3], ['b', 4]], %w(a b).zip(ary))
     def ary.to_ary; [5, 6]; end
@@ -1921,6 +1934,20 @@ class TestArray < Test::Unit::TestCase
     def o.==(x); :foo; end
     assert_equal([0, 1, 2], o)
     assert_not_equal([0, 1, 2], [0, 1, 3])
+  end
+
+  A = Array.new(3, &:to_s)
+  B = A.dup
+
+  def test_equal_resize
+    o = Object.new
+    def o.==(o)
+      A.clear
+      B.clear
+      true
+    end
+    A[1] = o
+    assert_equal(A, B)
   end
 
   def test_hash2
@@ -2019,15 +2046,15 @@ class TestArray < Test::Unit::TestCase
   def test_sample_random
     ary = (0...10000).to_a
     assert_raise(ArgumentError) {ary.sample(1, 2, random: nil)}
-    gen0 = proc do
-      0.5
+    gen0 = proc do |max|
+      (max+1)/2
     end
     class << gen0
       alias rand call
     end
-    gen1 = proc do
+    gen1 = proc do |max|
       ary.replace([])
-      0.5
+      (max+1)/2
     end
     class << gen1
       alias rand call
@@ -2212,5 +2239,32 @@ class TestArray < Test::Unit::TestCase
     assert_match(/can't modify frozen/, e.message)
     a = [1,2,3]
     assert_raise(ArgumentError) { a.rotate!(1, 1) }
+  end
+
+  def test_bsearch_in_find_minimum_mode
+    a = [0, 4, 7, 10, 12]
+    assert_equal(4, a.bsearch {|x| x >=   4 })
+    assert_equal(7, a.bsearch {|x| x >=   6 })
+    assert_equal(0, a.bsearch {|x| x >=  -1 })
+    assert_equal(nil, a.bsearch {|x| x >= 100 })
+  end
+
+  def test_bsearch_in_find_any_mode
+    a = [0, 4, 7, 10, 12]
+    assert_include([4, 7], a.bsearch {|x| 1 - x / 4 })
+    assert_equal(nil, a.bsearch {|x| 4 - x / 2 })
+    assert_equal(nil, a.bsearch {|x| 1 })
+    assert_equal(nil, a.bsearch {|x| -1 })
+
+    assert_include([4, 7], a.bsearch {|x| (1 - x / 4) * (2**100) })
+    assert_equal(nil, a.bsearch {|x|   1  * (2**100) })
+    assert_equal(nil, a.bsearch {|x| (-1) * (2**100) })
+
+    assert_include([4, 7], a.bsearch {|x| (2**100).coerce((1 - x / 4) * (2**100)).first })
+  end
+
+  def test_bsearch_undefined
+    a = [0, 4, 7, 10, 12]
+    assert_equal(nil, a.bsearch {|x| "foo" }) # undefined behavior
   end
 end

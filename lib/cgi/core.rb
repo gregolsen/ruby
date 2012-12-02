@@ -67,8 +67,8 @@ class CGI
   # Create an HTTP header block as a string.
   #
   # :call-seq:
-  #   header(content_type_string="text/html")
-  #   header(headers_hash)
+  #   http_header(content_type_string="text/html")
+  #   http_header(headers_hash)
   #
   # Includes the empty line that ends the header block.
   #
@@ -127,29 +127,29 @@ class CGI
   #
   # Examples:
   #
-  #   header
+  #   http_header
   #     # Content-Type: text/html
   #
-  #   header("text/plain")
+  #   http_header("text/plain")
   #     # Content-Type: text/plain
   #
-  #   header("nph"        => true,
-  #          "status"     => "OK",  # == "200 OK"
-  #            # "status"     => "200 GOOD",
-  #          "server"     => ENV['SERVER_SOFTWARE'],
-  #          "connection" => "close",
-  #          "type"       => "text/html",
-  #          "charset"    => "iso-2022-jp",
-  #            # Content-Type: text/html; charset=iso-2022-jp
-  #          "length"     => 103,
-  #          "language"   => "ja",
-  #          "expires"    => Time.now + 30,
-  #          "cookie"     => [cookie1, cookie2],
-  #          "my_header1" => "my_value"
-  #          "my_header2" => "my_value")
+  #   http_header("nph"        => true,
+  #               "status"     => "OK",  # == "200 OK"
+  #                 # "status"     => "200 GOOD",
+  #               "server"     => ENV['SERVER_SOFTWARE'],
+  #               "connection" => "close",
+  #               "type"       => "text/html",
+  #               "charset"    => "iso-2022-jp",
+  #                 # Content-Type: text/html; charset=iso-2022-jp
+  #               "length"     => 103,
+  #               "language"   => "ja",
+  #               "expires"    => Time.now + 30,
+  #               "cookie"     => [cookie1, cookie2],
+  #               "my_header1" => "my_value"
+  #               "my_header2" => "my_value")
   #
   # This method does not perform charset conversion.
-  def header(options='text/html')
+  def http_header(options='text/html')
     if options.is_a?(String)
       content_type = options
       buf = _header_for_string(content_type)
@@ -170,7 +170,15 @@ class CGI
       buf << EOL    # empty line of separator
       return buf
     end
-  end # header()
+  end # http_header()
+
+  # This method is an alias for #http_header, when HTML5 tag maker is inactive.
+  #
+  # NOTE: use #http_header to create HTTP header blocks, this alias is only
+  # provided for backwards compatibility.
+  #
+  # Using #header with the HTML5 tag maker will create a <header> element.
+  alias :header :http_header
 
   def _header_for_string(content_type) #:nodoc:
     buf = ''
@@ -283,7 +291,7 @@ class CGI
   # +content_type_string+::
   #   If a string is passed, it is assumed to be the content type.
   # +headers_hash+::
-  #   This is a Hash of headers, similar to that used by #header.
+  #   This is a Hash of headers, similar to that used by #http_header.
   # +block+::
   #   A block is required and should evaluate to the body of the response.
   #
@@ -344,7 +352,7 @@ class CGI
     options["length"] = content.bytesize.to_s
     output = stdoutput
     output.binmode if defined? output.binmode
-    output.print header(options)
+    output.print http_header(options)
     output.print content unless "HEAD" == env_table['REQUEST_METHOD']
   end
 
@@ -479,10 +487,12 @@ class CGI
       bufsize = 10 * 1024
       max_count = MAX_MULTIPART_COUNT
       n = 0
+      tempfiles = []
       while true
         (n += 1) < max_count or raise StandardError.new("too many parameters.")
         ## create body (StringIO or Tempfile)
         body = create_body(bufsize < content_length)
+        tempfiles << body if defined?(Tempfile) && body.kind_of?(Tempfile)
         class << body
           if method_defined?(:path)
             alias local_path path
@@ -530,16 +540,17 @@ class CGI
         /Content-Disposition:.* filename=(?:"(.*?)"|([^;\r\n]*))/i.match(head)
         filename = $1 || $2 || ''
         filename = CGI.unescape(filename) if unescape_filename?()
-        body.instance_variable_set('@original_filename', filename.taint)
+        body.instance_variable_set(:@original_filename, filename.taint)
         ## content type
         /Content-Type: (.*)/i.match(head)
         (content_type = $1 || '').chomp!
-        body.instance_variable_set('@content_type', content_type.taint)
+        body.instance_variable_set(:@content_type, content_type.taint)
         ## query parameter name
         /Content-Disposition:.* name=(?:"(.*?)"|([^;\r\n]*))/i.match(head)
         name = $1 || $2 || ''
         if body.original_filename.empty?
           value=body.read.dup.force_encoding(@accept_charset)
+          body.unlink if defined?(Tempfile) && body.kind_of?(Tempfile)
           (params[name] ||= []) << value
           unless value.valid_encoding?
             if @accept_charset_error_block
@@ -563,6 +574,14 @@ class CGI
       raise EOFError, "bad boundary end of body part" unless boundary_end =~ /--/
       params.default = []
       params
+    ensure
+      if $! && tempfiles
+        tempfiles.each {|t|
+          if t.path
+            t.unlink
+          end
+        }
+      end
     end # read_multipart
     private :read_multipart
     def create_body(is_large)  #:nodoc:
@@ -771,6 +790,7 @@ class CGI
   #     "html4":: HTML 4.0
   #     "html4Tr":: HTML 4.0 Transitional
   #     "html4Fr":: HTML 4.0 with Framesets
+  #     "html5":: HTML 5
   #
   # <tt>block</tt>::
   #   If provided, the block is called when an invalid encoding is
@@ -788,7 +808,7 @@ class CGI
   # cookies and other parameters are parsed automatically from the standard
   # CGI locations, which varies according to the REQUEST_METHOD.
   def initialize(options = {}, &block) # :yields: name, value
-    @accept_charset_error_block=block if block_given?
+    @accept_charset_error_block = block_given? ? block : nil
     @options={:accept_charset=>@@accept_charset}
     case options
     when Hash
@@ -829,6 +849,11 @@ class CGI
       extend Html4Tr
       element_init()
       extend Html4Fr
+      element_init()
+      extend HtmlExtension
+    when "html5"
+      require 'cgi/html'
+      extend Html5
       element_init()
       extend HtmlExtension
     end

@@ -92,12 +92,26 @@ CeBUl+MahZtn9fO1JKdF4qJmS39dXnpENg==
 
 end
 
-  TEST_KEY_DH512 = OpenSSL::PKey::DH.new <<-_end_of_pem_
+  TEST_KEY_DH512_PUB = OpenSSL::PKey::DH.new <<-_end_of_pem_
 -----BEGIN DH PARAMETERS-----
 MEYCQQDmWXGPqk76sKw/edIOdhAQD4XzjJ+AR/PTk2qzaGs+u4oND2yU5D2NN4wr
 aPgwHyJBiK1/ebK3tYcrSKrOoRyrAgEC
 -----END DH PARAMETERS-----
   _end_of_pem_
+
+  TEST_KEY_DH1024 = OpenSSL::PKey::DH.new <<-_end_of_pem_
+-----BEGIN DH PARAMETERS-----
+MIGHAoGBAKnKQ8MNK6nYZzLrrcuTsLxuiJGXoOO5gT+tljOTbHBuiktdMTITzIY0
+pFxIvjG05D7HoBZQfrR0c92NGWPkAiCkhQKB8JCbPVzwNLDy6DZ0pmofDKrEsYHG
+AQjjxMXhwULlmuR/K+WwlaZPiLIBYalLAZQ7ZbOPeVkJ8ePao0eLAgEC
+-----END DH PARAMETERS-----
+  _end_of_pem_
+
+  TEST_KEY_DH1024.priv_key = OpenSSL::BN.new("48561834C67E65FFD2A9B47F41E5E78FDC95C387428FDB1E4B0188B64D1643C3A8D3455B945B7E8C4D166010C7C2CE23BFB9BEF43D0348FE7FA5284B0225E7FE1537546D114E3D8A4411B9B9351AB451E1A358F50ED61B1F00DA29336EEBBD649980AC86D76AF8BBB065298C2052672EEF3EF13AB47A15275FC2836F3AC74CEA", 16)
+
+  DSA_SIGNATURE_DIGEST = OpenSSL::OPENSSL_VERSION_NUMBER > 0x10000000 ?
+                         OpenSSL::Digest::SHA1 :
+                         OpenSSL::Digest::DSS1
 
   module_function
 
@@ -238,7 +252,6 @@ aPgwHyJBiK1/ebK3tYcrSKrOoRyrAgEC
     rescue Errno::EBADF, IOError, Errno::EINVAL, Errno::ECONNABORTED, Errno::ENOTSOCK, Errno::ECONNRESET
     end
 
-    DHParam = OpenSSL::PKey::DH.new(128)
     def start_server(port0, verify_mode, start_immediately, args = {}, &block)
       ctx_proc = args[:ctx_proc]
       server_proc = args[:server_proc]
@@ -252,7 +265,7 @@ aPgwHyJBiK1/ebK3tYcrSKrOoRyrAgEC
       #ctx.extra_chain_cert = [ ca_cert ]
       ctx.cert = @svr_cert
       ctx.key = @svr_key
-      ctx.tmp_dh_callback = proc { DHParam }
+      ctx.tmp_dh_callback = proc { OpenSSL::TestUtils::TEST_KEY_DH1024 }
       ctx.verify_mode = verify_mode
       ctx_proc.call(ctx) if ctx_proc
 

@@ -3,40 +3,44 @@ require 'tempfile'
 require_relative 'envutil'
 
 class TestException < Test::Unit::TestCase
-  def test_exception
+  def test_exception_rescued
     begin
       raise "this must be handled"
       assert(false)
     rescue
       assert(true)
     end
+  end
 
-    $bad = true
+  def test_exception_retry
+    bad = true
     begin
       raise "this must be handled no.2"
     rescue
-      if $bad
-        $bad = false
+      if bad
+        bad = false
         retry
         assert(false)
       end
     end
     assert(true)
+  end
 
-    # exception in rescue clause
-    $string = "this must be handled no.3"
+  def test_exception_in_rescue
+    string = "this must be handled no.3"
     e = assert_raise(RuntimeError) do
       begin
         raise "exception in rescue clause"
       rescue
-        raise $string
+        raise string
       end
       assert(false)
     end
-    assert_equal($string, e.message)
+    assert_equal(string, e.message)
+  end
 
-    # exception in ensure clause
-    $string = "exception in ensure clause"
+  def test_exception_in_ensure
+    string = "exception in ensure clause"
     e = assert_raise(RuntimeError) do
       begin
         raise "this must be handled no.4"
@@ -47,40 +51,48 @@ class TestException < Test::Unit::TestCase
       end
       assert(false)
     end
-    assert_equal($string, e.message)
+    assert_equal(string, e.message)
+  end
 
-    $bad = true
+  def test_exception_ensure
+    bad = true
     begin
       begin
         raise "this must be handled no.5"
       ensure
-        $bad = false
+        bad = false
       end
     rescue
     end
-    assert(!$bad)
+    assert(!bad)
+  end
 
-    $bad = true
+  def test_exception_ensure_2   # just duplication?
+    bad = true
     begin
       begin
         raise "this must be handled no.6"
       ensure
-        $bad = false
+        bad = false
       end
     rescue
     end
-    assert(!$bad)
+    assert(!bad)
+  end
 
-    $bad = true
+  def test_break_ensure
+    bad = true
     while true
       begin
         break
       ensure
-        $bad = false
+        bad = false
       end
     end
-    assert(!$bad)
+    assert(!bad)
+  end
 
+  def test_catch_throw
     assert(catch(:foo) {
              loop do
                loop do
@@ -92,10 +104,19 @@ class TestException < Test::Unit::TestCase
              end
              false
            })
-
   end
 
-  def test_else
+  def test_catch_throw_in_require
+    bug7185 = '[ruby-dev:46234]'
+    t = Tempfile.open(["dep", ".rb"])
+    t.puts("throw :extdep, 42")
+    t.close
+    assert_equal(42, catch(:extdep) {require t.path}, bug7185)
+  ensure
+    t.close! if t
+  end
+
+  def test_else_no_exception
     begin
       assert(true)
     rescue
@@ -103,7 +124,9 @@ class TestException < Test::Unit::TestCase
     else
       assert(true)
     end
+  end
 
+  def test_else_raised
     begin
       assert(true)
       raise
@@ -113,7 +136,9 @@ class TestException < Test::Unit::TestCase
     else
       assert(false)
     end
+  end
 
+  def test_else_nested_no_exception
     begin
       assert(true)
       begin
@@ -129,7 +154,9 @@ class TestException < Test::Unit::TestCase
     else
       assert(true)
     end
+  end
 
+  def test_else_nested_rescued
     begin
       assert(true)
       begin
@@ -147,7 +174,9 @@ class TestException < Test::Unit::TestCase
     else
       assert(true)
     end
+  end
 
+  def test_else_nested_unrescued
     begin
       assert(true)
       begin
@@ -165,7 +194,9 @@ class TestException < Test::Unit::TestCase
     else
       assert(false)
     end
+  end
 
+  def test_else_nested_rescued_reraise
     begin
       assert(true)
       begin
@@ -408,5 +439,75 @@ end.join
     end
   ensure
     t.close(true) if t
+  end
+
+  Bug4438 = '[ruby-core:35364]'
+
+  def test_rescue_single_argument
+    assert_raise(TypeError, Bug4438) do
+      begin
+        raise
+      rescue 1
+      end
+    end
+  end
+
+  def test_rescue_splat_argument
+    assert_raise(TypeError, Bug4438) do
+      begin
+        raise
+      rescue *Array(1)
+      end
+    end
+  end
+
+  def test_to_s_taintness_propagation
+    for exc in [Exception, NameError]
+      m = "abcdefg"
+      e = exc.new(m)
+      e.taint
+      s = e.to_s
+      assert_equal(false, m.tainted?,
+                   "#{exc}#to_s should not propagate taintness")
+      assert_equal(false, s.tainted?,
+                   "#{exc}#to_s should not propagate taintness")
+    end
+
+    o = Object.new
+    def o.to_str
+      "foo"
+    end
+    o.taint
+    e = NameError.new(o)
+    s = e.to_s
+    assert_equal(false, s.tainted?)
+  end
+
+  def test_exception_to_s_should_not_propagate_untrustedness
+    favorite_lang = "Ruby"
+
+    for exc in [Exception, NameError]
+      assert_raise(SecurityError) do
+        lambda {
+          $SAFE = 4
+          exc.new(favorite_lang).to_s
+          favorite_lang.replace("Python")
+        }.call
+      end
+    end
+
+    assert_raise(SecurityError) do
+      lambda {
+        $SAFE = 4
+        o = Object.new
+        o.singleton_class.send(:define_method, :to_str) {
+          favorite_lang
+        }
+        NameError.new(o).to_s
+        favorite_lang.replace("Python")
+      }.call
+    end
+
+    assert_equal("Ruby", favorite_lang)
   end
 end

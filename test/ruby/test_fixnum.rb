@@ -271,4 +271,12 @@ class TestFixnum < Test::Unit::TestCase
   def test_xor_with_nonintegral_numeric
     assert_raise(TypeError, "#1792") { 1 ^ DummyNumeric.new }
   end
+
+  def test_singleton_method
+    assert_raise(TypeError) { a = 1; def a.foo; end }
+  end
+
+  def test_frozen
+    assert_equal(true, 1.frozen?)
+  end
 end

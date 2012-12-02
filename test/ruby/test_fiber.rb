@@ -47,20 +47,21 @@ class TestFiber < Test::Unit::TestCase
   end
 
   def test_many_fibers_with_threads
-    max = 1000
-    @cnt = 0
-    (1..100).map{|ti|
-      Thread.new{
-        max.times{|i|
-          Fiber.new{
-            @cnt += 1
-          }.resume
+    assert_normal_exit %q{
+      max = 1000
+      @cnt = 0
+      (1..100).map{|ti|
+        Thread.new{
+          max.times{|i|
+            Fiber.new{
+              @cnt += 1
+            }.resume
+          }
         }
+      }.each{|t|
+        t.join
       }
-    }.each{|t|
-      t.join
     }
-    assert_equal(:ok, :ok)
   end
 
   def test_error
@@ -216,10 +217,7 @@ class TestFiber < Test::Unit::TestCase
 
   def test_no_valid_cfp
     bug5083 = '[ruby-dev:44208]'
-    error = assert_raise(RuntimeError) do
-      Fiber.new(&Module.method(:nesting)).resume
-    end
-    assert_equal("Can't call on top of Fiber or Thread", error.message, bug5083)
+    assert_equal([], Fiber.new(&Module.method(:nesting)).resume)
     error = assert_raise(RuntimeError) do
       Fiber.new(&Module.method(:undef_method)).resume(:to_s)
     end

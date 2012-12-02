@@ -156,35 +156,58 @@ file_path_convert(VALUE name)
     return name;
 }
 
-static VALUE
-rb_get_path_check(VALUE obj, int level)
+static rb_encoding *
+check_path_encoding(VALUE str)
+{
+    rb_encoding *enc = rb_enc_get(str);
+    if (!rb_enc_asciicompat(enc)) {
+	rb_raise(rb_eEncCompatError, "path name must be ASCII-compatible (%s): %"PRIsVALUE,
+		 rb_enc_name(enc), rb_str_inspect(str));
+    }
+    return enc;
+}
+
+VALUE
+rb_get_path_check_to_string(VALUE obj, int level)
 {
     VALUE tmp;
     ID to_path;
-    rb_encoding *enc;
 
     if (insecure_obj_p(obj, level)) {
 	rb_insecure_operation();
     }
 
+    if (RB_TYPE_P(obj, T_STRING)) {
+	return obj;
+    }
     CONST_ID(to_path, "to_path");
     tmp = rb_check_funcall(obj, to_path, 0, 0);
     if (tmp == Qundef) {
 	tmp = obj;
     }
     StringValue(tmp);
+    return tmp;
+}
 
+VALUE
+rb_get_path_check_convert(VALUE obj, VALUE tmp, int level)
+{
     tmp = file_path_convert(tmp);
     if (obj != tmp && insecure_obj_p(tmp, level)) {
 	rb_insecure_operation();
     }
-    enc = rb_enc_get(tmp);
-    if (!rb_enc_asciicompat(enc)) {
-	tmp = rb_str_inspect(tmp);
-	rb_raise(rb_eEncCompatError, "path name must be ASCII-compatible (%s): %s",
-		 rb_enc_name(enc), RSTRING_PTR(tmp));
-    }
+
+    check_path_encoding(tmp);
+    StringValueCStr(tmp);
+
     return rb_str_new4(tmp);
+}
+
+static VALUE
+rb_get_path_check(VALUE obj, int level)
+{
+    VALUE tmp = rb_get_path_check_to_string(obj, level);
+    return rb_get_path_check_convert(obj, tmp, level);
 }
 
 VALUE
@@ -2443,7 +2466,6 @@ rb_file_s_readlink(VALUE klass, VALUE path)
 static VALUE
 rb_readlink(VALUE path)
 {
-    char *buf;
     int size = 100;
     ssize_t rv;
     VALUE v;
@@ -2451,21 +2473,20 @@ rb_readlink(VALUE path)
     rb_secure(2);
     FilePathValue(path);
     path = rb_str_encode_ospath(path);
-    buf = xmalloc(size);
-    while ((rv = readlink(RSTRING_PTR(path), buf, size)) == size
+    v = rb_enc_str_new(0, size, rb_filesystem_encoding());
+    while ((rv = readlink(RSTRING_PTR(path), RSTRING_PTR(v), size)) == size
 #ifdef _AIX
 	    || (rv < 0 && errno == ERANGE) /* quirky behavior of GPFS */
 #endif
 	) {
+	rb_str_modify_expand(v, size);
 	size *= 2;
-	buf = xrealloc(buf, size);
     }
     if (rv < 0) {
-	xfree(buf);
+	rb_str_resize(v, 0);
 	rb_sys_fail_path(path);
     }
-    v = rb_filesystem_str_new(buf, rv);
-    xfree(buf);
+    rb_str_resize(v, rv);
 
     return v;
 }
@@ -2629,6 +2650,7 @@ has_drive_letter(const char *buf)
     }
 }
 
+#ifndef _WIN32
 static char*
 getcwdofdrv(int drv)
 {
@@ -2655,6 +2677,7 @@ getcwdofdrv(int drv)
     }
     return drvcwd;
 }
+#endif
 
 static inline int
 not_same_drive(VALUE path, int drive)
@@ -2857,6 +2880,7 @@ rb_home_dir(const char *user, VALUE result)
     return result;
 }
 
+#ifndef _WIN32
 static char *
 append_fspath(VALUE result, VALUE fname, char *dir, rb_encoding **enc, rb_encoding *fsenc)
 {
@@ -2882,8 +2906,8 @@ append_fspath(VALUE result, VALUE fname, char *dir, rb_encoding **enc, rb_encodi
     return buf + dirlen;
 }
 
-static VALUE
-file_expand_path(VALUE fname, VALUE dname, int abs_mode, VALUE result)
+VALUE
+rb_file_expand_path_internal(VALUE fname, VALUE dname, int abs_mode, int long_name, VALUE result)
 {
     const char *s, *b, *fend;
     char *buf, *p, *pend, *root;
@@ -2945,7 +2969,7 @@ file_expand_path(VALUE fname, VALUE dname, int abs_mode, VALUE result)
 	    /* specified drive, but not full path */
 	    int same = 0;
 	    if (!NIL_P(dname) && !not_same_drive(dname, s[0])) {
-		file_expand_path(dname, Qnil, abs_mode, result);
+		rb_file_expand_path_internal(dname, Qnil, abs_mode, long_name, result);
 		BUFINIT();
 		if (has_drive_letter(p) && TOLOWER(p[0]) == TOLOWER(s[0])) {
 		    /* ok, same drive */
@@ -2969,7 +2993,7 @@ file_expand_path(VALUE fname, VALUE dname, int abs_mode, VALUE result)
 #endif
     else if (!rb_is_absolute_path(s)) {
 	if (!NIL_P(dname)) {
-	    file_expand_path(dname, Qnil, abs_mode, result);
+	    rb_file_expand_path_internal(dname, Qnil, abs_mode, long_name, result);
 	    rb_enc_associate(result, rb_enc_check(result, fname));
 	    BUFINIT();
 	    p = pend;
@@ -3222,6 +3246,7 @@ file_expand_path(VALUE fname, VALUE dname, int abs_mode, VALUE result)
     ENC_CODERANGE_CLEAR(result);
     return result;
 }
+#endif /* _WIN32 */
 
 #define EXPAND_PATH_BUFFER() rb_usascii_str_new(0, MAXPATHLEN + 2)
 
@@ -3232,14 +3257,20 @@ file_expand_path(VALUE fname, VALUE dname, int abs_mode, VALUE result)
 static VALUE
 file_expand_path_1(VALUE fname)
 {
-    return file_expand_path(fname, Qnil, 0, EXPAND_PATH_BUFFER());
+    return rb_file_expand_path_internal(fname, Qnil, 0, 0, EXPAND_PATH_BUFFER());
 }
 
 VALUE
 rb_file_expand_path(VALUE fname, VALUE dname)
 {
     check_expand_path_args(fname, dname);
-    return file_expand_path(fname, dname, 0, EXPAND_PATH_BUFFER());
+    return rb_file_expand_path_internal(fname, dname, 0, 1, EXPAND_PATH_BUFFER());
+}
+
+VALUE
+rb_file_expand_path_fast(VALUE fname, VALUE dname)
+{
+    return rb_file_expand_path_internal(fname, dname, 0, 0, EXPAND_PATH_BUFFER());
 }
 
 /*
@@ -3276,7 +3307,7 @@ VALUE
 rb_file_absolute_path(VALUE fname, VALUE dname)
 {
     check_expand_path_args(fname, dname);
-    return file_expand_path(fname, dname, 1, EXPAND_PATH_BUFFER());
+    return rb_file_expand_path_internal(fname, dname, 1, 1, EXPAND_PATH_BUFFER());
 }
 
 /*
@@ -3377,6 +3408,7 @@ realpath_rec(long *prefixlenp, VALUE *resolvedp, const char *unresolved, VALUE l
 #ifdef HAVE_READLINK
                 if (S_ISLNK(sbuf.st_mode)) {
 		    VALUE link;
+		    volatile VALUE link_orig = Qnil;
 		    const char *link_prefix, *link_names;
                     long link_prefixlen;
                     rb_hash_aset(loopcheck, testpath, ID2SYM(resolving));
@@ -3386,6 +3418,7 @@ realpath_rec(long *prefixlenp, VALUE *resolvedp, const char *unresolved, VALUE l
 		    link_prefixlen = link_names - link_prefix;
 		    if (link_prefixlen > 0) {
 			rb_encoding *enc, *linkenc = rb_enc_get(link);
+			link_orig = link;
 			link = rb_str_subseq(link, 0, link_prefixlen);
 			enc = rb_enc_check(*resolvedp, link);
 			if (enc != linkenc) link = rb_str_conv_enc(link, linkenc, enc);
@@ -3393,6 +3426,7 @@ realpath_rec(long *prefixlenp, VALUE *resolvedp, const char *unresolved, VALUE l
 			*prefixlenp = link_prefixlen;
 		    }
 		    realpath_rec(prefixlenp, resolvedp, link_names, loopcheck, strict, *unresolved_firstsep == '\0');
+		    RB_GC_GUARD(link_orig);
 		    rb_hash_aset(loopcheck, testpath, rb_str_dup_frozen(*resolvedp));
                 }
                 else
@@ -3654,11 +3688,7 @@ rb_file_s_basename(int argc, VALUE *argv)
 
     if (rb_scan_args(argc, argv, "11", &fname, &fext) == 2) {
 	StringValue(fext);
-	enc = rb_enc_get(fext);
-	if (!rb_enc_asciicompat(enc)) {
-	    rb_raise(rb_eEncCompatError, "ascii incompatible character encodings: %s",
-		     rb_enc_name(enc));
-	}
+	enc = check_path_encoding(fext);
     }
     FilePathStringValue(fname);
     if (NIL_P(fext) || !(enc = rb_enc_compatible(fname, fext))) {
@@ -3820,13 +3850,21 @@ ruby_enc_find_extname(const char *name, long *len, rb_encoding *enc)
  *  call-seq:
  *     File.extname(path)  ->  string
  *
- *  Returns the extension (the portion of file name in <i>path</i>
- *  after the period).
+ *  Returns the extension (the portion of file name in +path+
+ *  starting from the last period).
+ *
+ *  If +path+ is a dotfile, or starts with a period, then the starting
+ *  dot is not dealt with the start of the extension.
+ *
+ *  An empty string will also be returned when the period is the last character
+ *  in +path+.
  *
  *     File.extname("test.rb")         #=> ".rb"
  *     File.extname("a/b/d/test.rb")   #=> ".rb"
+ *     File.extname("foo.")	       #=> ""
  *     File.extname("test")            #=> ""
  *     File.extname(".profile")        #=> ""
+ *     File.extname(".profile.sh")     #=> ".sh"
  *
  */
 
@@ -3901,6 +3939,7 @@ rb_file_join(VALUE ary, VALUE sep)
     long len, i;
     VALUE result, tmp;
     const char *name, *tail;
+    int checked = TRUE;
 
     if (RARRAY_LEN(ary) == 0) return rb_str_new(0, 0);
 
@@ -3908,6 +3947,7 @@ rb_file_join(VALUE ary, VALUE sep)
     for (i=0; i<RARRAY_LEN(ary); i++) {
 	tmp = RARRAY_PTR(ary)[i];
 	if (RB_TYPE_P(tmp, T_STRING)) {
+	    check_path_encoding(tmp);
 	    len += RSTRING_LEN(tmp);
 	}
 	else {
@@ -3919,11 +3959,14 @@ rb_file_join(VALUE ary, VALUE sep)
 	len += RSTRING_LEN(sep) * (RARRAY_LEN(ary) - 1);
     }
     result = rb_str_buf_new(len);
+    RBASIC(result)->klass = 0;
     OBJ_INFECT(result, ary);
     for (i=0; i<RARRAY_LEN(ary); i++) {
 	tmp = RARRAY_PTR(ary)[i];
 	switch (TYPE(tmp)) {
 	  case T_STRING:
+	    if (!checked) check_path_encoding(tmp);
+	    StringValueCStr(tmp);
 	    break;
 	  case T_ARRAY:
 	    if (ary == tmp) {
@@ -3939,9 +3982,9 @@ rb_file_join(VALUE ary, VALUE sep)
 	    break;
 	  default:
 	    FilePathStringValue(tmp);
+	    checked = FALSE;
 	}
-	name = StringValueCStr(result);
-	len = RSTRING_LEN(result);
+	RSTRING_GETMEM(result, name, len);
 	if (i == 0) {
 	    rb_enc_copy(result, tmp);
 	}
@@ -3956,6 +3999,7 @@ rb_file_join(VALUE ary, VALUE sep)
 	}
 	rb_str_buf_append(result, tmp);
     }
+    RBASIC(result)->klass = rb_cString;
 
     return result;
 }
@@ -5236,13 +5280,14 @@ rb_find_file_ext_safe(VALUE *filep, const char *const *ext, int safe_level)
 	rb_raise(rb_eSecurityError, "loading from non-absolute path %s", f);
     }
 
-    RB_GC_GUARD(load_path) = rb_get_load_path();
+    RB_GC_GUARD(load_path) = rb_get_expanded_load_path();
     if (!load_path) return 0;
 
     fname = rb_str_dup(*filep);
     RBASIC(fname)->klass = 0;
     fnlen = RSTRING_LEN(fname);
     tmp = rb_str_tmp_new(MAXPATHLEN + 2);
+    rb_enc_associate_index(tmp, rb_usascii_encindex());
     for (j=0; ext[j]; j++) {
 	rb_str_cat2(fname, ext[j]);
 	for (i = 0; i < RARRAY_LEN(load_path); i++) {
@@ -5250,7 +5295,7 @@ rb_find_file_ext_safe(VALUE *filep, const char *const *ext, int safe_level)
 
 	    RB_GC_GUARD(str) = rb_get_path_check(str, safe_level);
 	    if (RSTRING_LEN(str) == 0) continue;
-	    file_expand_path(fname, str, 0, tmp);
+	    rb_file_expand_path_internal(fname, str, 0, 0, tmp);
 	    if (rb_file_load_ok(RSTRING_PTR(tmp))) {
 		*filep = copy_path_class(tmp, *filep);
 		return (int)(j+1);
@@ -5300,16 +5345,17 @@ rb_find_file_safe(VALUE path, int safe_level)
 	rb_raise(rb_eSecurityError, "loading from non-absolute path %s", f);
     }
 
-    RB_GC_GUARD(load_path) = rb_get_load_path();
+    RB_GC_GUARD(load_path) = rb_get_expanded_load_path();
     if (load_path) {
 	long i;
 
 	tmp = rb_str_tmp_new(MAXPATHLEN + 2);
+	rb_enc_associate_index(tmp, rb_usascii_encindex());
 	for (i = 0; i < RARRAY_LEN(load_path); i++) {
 	    VALUE str = RARRAY_PTR(load_path)[i];
 	    RB_GC_GUARD(str) = rb_get_path_check(str, safe_level);
 	    if (RSTRING_LEN(str) > 0) {
-		file_expand_path(path, str, 0, tmp);
+		rb_file_expand_path_internal(path, str, 0, 0, tmp);
 		f = RSTRING_PTR(tmp);
 		if (rb_file_load_ok(f)) goto found;
 	    }
@@ -5475,14 +5521,88 @@ Init_File(void)
 
     rb_define_method(rb_cFile, "flock", rb_file_flock, 1);
 
+    /*
+     * Document-module: File::Constants
+     *
+     * File::Constants provides file-related constants.  All possible
+     * file constants are listed in the documentation but they may not all
+     * be present on your platform.
+     *
+     * If the underlying platform doesn't define a constant the corresponding
+     * Ruby constant is not defined.
+     *
+     * Your platform documentations (e.g. man open(2)) may describe more
+     * detailed information.
+     */
     rb_mFConst = rb_define_module_under(rb_cFile, "Constants");
     rb_include_module(rb_cIO, rb_mFConst);
-    rb_file_const("LOCK_SH", INT2FIX(LOCK_SH));
-    rb_file_const("LOCK_EX", INT2FIX(LOCK_EX));
-    rb_file_const("LOCK_UN", INT2FIX(LOCK_UN));
-    rb_file_const("LOCK_NB", INT2FIX(LOCK_NB));
 
-    rb_file_const("NULL", rb_obj_freeze(rb_usascii_str_new2(null_device)));
+    /* open for reading only */
+    rb_define_const(rb_mFConst, "RDONLY", INT2FIX(O_RDONLY));
+    /* open for writing only */
+    rb_define_const(rb_mFConst, "WRONLY", INT2FIX(O_WRONLY));
+    /* open for reading and writing */
+    rb_define_const(rb_mFConst, "RDWR", INT2FIX(O_RDWR));
+    /* append on each write */
+    rb_define_const(rb_mFConst, "APPEND", INT2FIX(O_APPEND));
+    /* create file if it does not exist */
+    rb_define_const(rb_mFConst, "CREAT", INT2FIX(O_CREAT));
+    /* error if CREAT and the file exists */
+    rb_define_const(rb_mFConst, "EXCL", INT2FIX(O_EXCL));
+#if defined(O_NDELAY) || defined(O_NONBLOCK)
+# ifndef O_NONBLOCK
+#   define O_NONBLOCK O_NDELAY
+# endif
+    /* do not block on open or for data to become available */
+    rb_define_const(rb_mFConst, "NONBLOCK", INT2FIX(O_NONBLOCK));
+#endif
+    /* truncate size to 0 */
+    rb_define_const(rb_mFConst, "TRUNC", INT2FIX(O_TRUNC));
+#ifdef O_NOCTTY
+    /* not to make opened IO the controlling terminal device */
+    rb_define_const(rb_mFConst, "NOCTTY", INT2FIX(O_NOCTTY));
+#endif
+#ifndef O_BINARY
+# define  O_BINARY 0
+#endif
+    /* disable line code conversion */
+    rb_define_const(rb_mFConst, "BINARY", INT2FIX(O_BINARY));
+#ifdef O_SYNC
+    /* any write operation perform synchronously */
+    rb_define_const(rb_mFConst, "SYNC", INT2FIX(O_SYNC));
+#endif
+#ifdef O_DSYNC
+    /* any write operation perform synchronously except some meta data */
+    rb_define_const(rb_mFConst, "DSYNC", INT2FIX(O_DSYNC));
+#endif
+#ifdef O_RSYNC
+    /* any read operation perform synchronously. used with SYNC or DSYNC. */
+    rb_define_const(rb_mFConst, "RSYNC", INT2FIX(O_RSYNC));
+#endif
+#ifdef O_NOFOLLOW
+    /* do not follow symlinks */
+    rb_define_const(rb_mFConst, "NOFOLLOW", INT2FIX(O_NOFOLLOW)); /* FreeBSD, Linux */
+#endif
+#ifdef O_NOATIME
+    /* do not change atime */
+    rb_define_const(rb_mFConst, "NOATIME", INT2FIX(O_NOATIME)); /* Linux */
+#endif
+#ifdef O_DIRECT
+    /*  Try to minimize cache effects of the I/O to and from this file. */
+    rb_define_const(rb_mFConst, "DIRECT", INT2FIX(O_DIRECT));
+#endif
+
+    /* shared lock. see File#flock */
+    rb_define_const(rb_mFConst, "LOCK_SH", INT2FIX(LOCK_SH));
+    /* exclusive lock. see File#flock */
+    rb_define_const(rb_mFConst, "LOCK_EX", INT2FIX(LOCK_EX));
+    /* unlock. see File#flock */
+    rb_define_const(rb_mFConst, "LOCK_UN", INT2FIX(LOCK_UN));
+    /* non-blocking lock. used with LOCK_SH or LOCK_EX. see File#flock  */
+    rb_define_const(rb_mFConst, "LOCK_NB", INT2FIX(LOCK_NB));
+
+    /* Name of the null device */
+    rb_define_const(rb_mFConst, "NULL", rb_obj_freeze(rb_usascii_str_new2(null_device)));
 
     rb_define_method(rb_cFile, "path",  rb_file_path, 0);
     rb_define_method(rb_cFile, "to_path",  rb_file_path, 0);
@@ -5544,4 +5664,8 @@ Init_File(void)
     rb_define_method(rb_cStat, "setuid?",  rb_stat_suid, 0);
     rb_define_method(rb_cStat, "setgid?",  rb_stat_sgid, 0);
     rb_define_method(rb_cStat, "sticky?",  rb_stat_sticky, 0);
+
+#ifdef _WIN32
+    rb_w32_init_file();
+#endif
 }

@@ -16,7 +16,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <errno.h>
-#include "atomic.h"
+#include "ruby_atomic.h"
 
 #if defined(__native_client__) && defined(NACL_NEWLIB)
 # include "nacl/signal.h"
@@ -34,12 +34,6 @@ ruby_atomic_exchange(rb_atomic_t *ptr, rb_atomic_t val)
 
 #if defined(__BEOS__) || defined(__HAIKU__)
 #undef SIGBUS
-#endif
-
-#ifdef HAVE_PTHREAD_SIGMASK
-#define USE_TRAP_MASK 1
-#else
-#define USE_TRAP_MASK 0
 #endif
 
 #ifndef NSIG
@@ -207,6 +201,26 @@ signo2signm(int no)
     return 0;
 }
 
+/*
+ * call-seq:
+ *     Signal.signame(signo)  ->  string
+ *
+ *  convert signal number to signal name
+ *
+ *     Signal.trap("INT") { |signo| puts Signal.signame(signo) }
+ *     Process.kill("INT", 0)
+ *
+ *  <em>produces:</em>
+ *
+ *     INT
+ */
+static VALUE
+sig_signame(VALUE recv, VALUE signo)
+{
+    const char *signame = signo2signm(NUM2INT(signo));
+    return rb_str_new_cstr(signame);
+}
+
 const char *
 ruby_signal_name(int no)
 {
@@ -304,11 +318,11 @@ ruby_default_signal(int sig)
  *  call-seq:
  *     Process.kill(signal, pid, ...)    -> fixnum
  *
- *  Sends the given signal to the specified process id(s), or to the
- *  current process if _pid_ is zero. _signal_ may be an
- *  integer signal number or a POSIX signal name (either with or without
- *  a +SIG+ prefix). If _signal_ is negative (or starts
- *  with a minus sign), kills process groups instead of
+ *  Sends the given signal to the specified process id(s) if _pid_ is positive.
+ *  If _pid_ is zero _signal_ is sent to all processes whose group ID is equal
+ *  to the group ID of the process. _signal_ may be an integer signal number or
+ *  a POSIX signal name (either with or without a +SIG+ prefix). If _signal_ is
+ *  negative (or starts with a minus sign), kills process groups instead of
  *  processes. Not all signals are available on all platforms.
  *
  *     pid = fork do
@@ -463,7 +477,11 @@ ruby_signal(int signum, sighandler_t handler)
 	sigact.sa_flags |= SA_NOCLDWAIT;
 #endif
 #if defined(SA_ONSTACK) && defined(USE_SIGALTSTACK)
-    if (signum == SIGSEGV || signum == SIGBUS)
+    if (signum == SIGSEGV
+#ifdef SIGBUS
+	|| signum == SIGBUS
+#endif
+       )
 	sigact.sa_flags |= SA_ONSTACK;
 #endif
     if (sigaction(signum, &sigact, &old) < 0) {
@@ -519,7 +537,7 @@ rb_signal_buff_size(void)
 static void
 rb_disable_interrupt(void)
 {
-#if USE_TRAP_MASK
+#ifdef HAVE_PTHREAD_SIGMASK
     sigset_t mask;
     sigfillset(&mask);
     pthread_sigmask(SIG_SETMASK, &mask, NULL);
@@ -529,7 +547,7 @@ rb_disable_interrupt(void)
 static void
 rb_enable_interrupt(void)
 {
-#if USE_TRAP_MASK
+#ifdef HAVE_PTHREAD_SIGMASK
     sigset_t mask;
     sigemptyset(&mask);
     pthread_sigmask(SIG_SETMASK, &mask, NULL);
@@ -544,12 +562,8 @@ rb_get_next_signal(void)
     if (signal_buff.size != 0) {
 	for (i=1; i<RUBY_NSIG; i++) {
 	    if (signal_buff.cnt[i] > 0) {
-		rb_disable_interrupt();
-		{
-		    ATOMIC_DEC(signal_buff.cnt[i]);
-		    ATOMIC_DEC(signal_buff.size);
-		}
-		rb_enable_interrupt();
+		ATOMIC_DEC(signal_buff.cnt[i]);
+		ATOMIC_DEC(signal_buff.size);
 		sig = i;
 		break;
 	    }
@@ -665,15 +679,6 @@ rb_signal_exec(rb_thread_t *th, int sig)
 	signal_exec(cmd, safe, sig);
     }
 }
-
-struct trap_arg {
-#if USE_TRAP_MASK
-    sigset_t mask;
-#endif
-    int sig;
-    sighandler_t func;
-    VALUE cmd;
-};
 
 static sighandler_t
 default_handler(int sig)
@@ -825,13 +830,17 @@ trap_signm(VALUE vsig)
 }
 
 static VALUE
-trap(struct trap_arg *arg)
+trap(int sig, sighandler_t func, VALUE command)
 {
-    sighandler_t oldfunc, func = arg->func;
-    VALUE oldcmd, command = arg->cmd;
-    int sig = arg->sig;
+    sighandler_t oldfunc;
+    VALUE oldcmd;
     rb_vm_t *vm = GET_VM();
 
+    /*
+     * Be careful. ruby_signal() and trap_list[sig].cmd must be changed
+     * atomically. In current implementation, we only need to don't call
+     * RUBY_VM_CHECK_INTS().
+     */
     oldfunc = ruby_signal(sig, func);
     oldcmd = vm->trap_list[sig].cmd;
     switch (oldcmd) {
@@ -847,22 +856,9 @@ trap(struct trap_arg *arg)
 
     vm->trap_list[sig].cmd = command;
     vm->trap_list[sig].safe = rb_safe_level();
-    /* enable at least specified signal. */
-#if USE_TRAP_MASK
-    sigdelset(&arg->mask, sig);
-#endif
+
     return oldcmd;
 }
-
-#if USE_TRAP_MASK
-static VALUE
-trap_ensure(struct trap_arg *arg)
-{
-    /* enable interrupt */
-    pthread_sigmask(SIG_SETMASK, &arg->mask, NULL);
-    return 0;
-}
-#endif
 
 static int
 reserved_signal_p(int signo)
@@ -928,45 +924,36 @@ reserved_signal_p(int signo)
 static VALUE
 sig_trap(int argc, VALUE *argv)
 {
-    struct trap_arg arg;
+    int sig;
+    sighandler_t func;
+    VALUE cmd;
 
     rb_secure(2);
     rb_check_arity(argc, 1, 2);
 
-    arg.sig = trap_signm(argv[0]);
-    if (reserved_signal_p(arg.sig)) {
-        const char *name = signo2signm(arg.sig);
+    sig = trap_signm(argv[0]);
+    if (reserved_signal_p(sig)) {
+        const char *name = signo2signm(sig);
         if (name)
             rb_raise(rb_eArgError, "can't trap reserved signal: SIG%s", name);
         else
-            rb_raise(rb_eArgError, "can't trap reserved signal: %d", (int)arg.sig);
+            rb_raise(rb_eArgError, "can't trap reserved signal: %d", sig);
     }
 
     if (argc == 1) {
-	arg.cmd = rb_block_proc();
-	arg.func = sighandler;
+	cmd = rb_block_proc();
+	func = sighandler;
     }
     else {
-	arg.cmd = argv[1];
-	arg.func = trap_handler(&arg.cmd, arg.sig);
+	cmd = argv[1];
+	func = trap_handler(&cmd, sig);
     }
 
-    if (OBJ_TAINTED(arg.cmd)) {
+    if (OBJ_TAINTED(cmd)) {
 	rb_raise(rb_eSecurityError, "Insecure: tainted signal trap");
     }
-#if USE_TRAP_MASK
-    {
-      sigset_t fullmask;
 
-      /* disable interrupt */
-      sigfillset(&fullmask);
-      pthread_sigmask(SIG_BLOCK, &fullmask, &arg.mask);
-
-      return rb_ensure(trap, (VALUE)&arg, trap_ensure, (VALUE)&arg);
-    }
-#else
-    return trap(&arg);
-#endif
+    return trap(sig, func, cmd);
 }
 
 /*
@@ -995,8 +982,10 @@ install_sighandler(int signum, sighandler_t handler)
 {
     sighandler_t old;
 
+    /* At this time, there is no subthread. Then sigmask guarantee atomics. */
     rb_disable_interrupt();
     old = ruby_signal(signum, handler);
+    /* signal handler should be inherited during exec. */
     if (old != SIG_DFL) {
 	ruby_signal(signum, old);
     }
@@ -1082,6 +1071,7 @@ Init_signal(void)
     rb_define_global_function("trap", sig_trap, -1);
     rb_define_module_function(mSignal, "trap", sig_trap, -1);
     rb_define_module_function(mSignal, "list", sig_list, 0);
+    rb_define_module_function(mSignal, "signame", sig_signame, 1);
 
     rb_define_method(rb_eSignal, "initialize", esignal_init, -1);
     rb_define_method(rb_eSignal, "signo", esignal_signo, 0);

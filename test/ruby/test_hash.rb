@@ -1,5 +1,7 @@
+# -*- coding: us-ascii -*-
 require 'test/unit'
 require 'continuation'
+require_relative 'envutil'
 
 class TestHash < Test::Unit::TestCase
 
@@ -89,6 +91,24 @@ class TestHash < Test::Unit::TestCase
 
   def teardown
     $VERBOSE = @verbose
+  end
+
+  def test_bad_initialize_copy
+    h = Class.new(Hash) {
+      def initialize_copy(h)
+        super(Object.new)
+      end
+    }.new
+    assert_raises(TypeError) { h.dup }
+  end
+
+  def test_dup_will_rehash
+    set1 = { }
+    set2 = { set1 => true}
+
+    set1[set1] = true
+
+    assert_equal set2, set2.dup
   end
 
   def test_s_AREF
@@ -314,6 +334,15 @@ class TestHash < Test::Unit::TestCase
         end
       end
     end
+  end
+
+  def test_dup_equality
+    h = {'k' => 'v'}
+    assert_equal(h, h.dup)
+    h1 = {h => 1}
+    assert_equal(h1, h1.dup)
+    h[1] = 2
+    assert_equal(h1, h1.dup)
   end
 
   def test_each
@@ -712,8 +741,8 @@ class TestHash < Test::Unit::TestCase
   def test_create
     assert_equal({1=>2, 3=>4}, Hash[[[1,2],[3,4]]])
     assert_raise(ArgumentError) { Hash[0, 1, 2] }
+    assert_warning(/wrong element type Fixnum at 1 /) {Hash[[[1, 2], 3]]}
     bug5406 = '[ruby-core:39945]'
-    assert_raise(ArgumentError, bug5406) { Hash[[[1, 2], 3]] }
     assert_raise(ArgumentError, bug5406) { Hash[[[1, 2], [3, 4, 5]]] }
     assert_equal({1=>2, 3=>4}, Hash[1,2,3,4])
     o = Object.new

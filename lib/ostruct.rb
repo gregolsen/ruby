@@ -74,7 +74,8 @@ class OpenStruct
   # Creates a new OpenStruct object.  By default, the resulting OpenStruct
   # object will have no attributes.
   #
-  # The optional +hash+, if given, will generate attributes and values.
+  # The optional +hash+, if given, will generate attributes and values
+  # (can be a Hash, an OpenStruct or a Struct).
   # For example:
   #
   #   require 'ostruct'
@@ -86,8 +87,9 @@ class OpenStruct
   def initialize(hash=nil)
     @table = {}
     if hash
-      for k,v in hash
-        @table[k.to_sym] = v
+      hash.each_pair do |k, v|
+        k = k.to_sym
+        @table[k] = v
         new_ostruct_member(k)
       end
     end
@@ -114,32 +116,28 @@ class OpenStruct
   end
 
   #
-  # Provides marshalling support for use by the Marshal library. Returning the
-  # underlying Hash table that contains the functions defined as the keys and
-  # the values assigned to them.
+  # Yields all attributes (as a symbol) along with the corresponding values
+  # or returns an enumerator if not block is given.
+  # Example:
   #
-  #    require 'ostruct'
+  #   require 'ostruct'
+  #   data = OpenStruct.new("country" => "Australia", :population => 20_000_000)
+  #   data.each_pair.to_a  # => [[:country, "Australia"], [:population, 20000000]]
   #
-  #    person = OpenStruct.new
-  #    person.name = 'John Smith'
-  #    person.age  = 70
+  def each_pair
+    return to_enum __method__ unless block_given?
+    @table.each_pair{|p| yield p}
+  end
+
   #
-  #    person.marshal_dump # => { :name => 'John Smith', :age => 70 }
+  # Provides marshalling support for use by the Marshal library.
   #
   def marshal_dump
     @table
   end
 
   #
-  # Provides marshalling support for use by the Marshal library. Accepting
-  # a Hash of keys and values which will be used to populate the internal table
-  #
-  #    require 'ostruct'
-  #
-  #    event = OpenStruct.new
-  #    hash = { 'time' => Time.now, 'title' => 'Birthday Party' }
-  #    event.marshal_load(hash)
-  #    event.title # => 'Birthday Party'
+  # Provides marshalling support for use by the Marshal library.
   #
   def marshal_load(x)
     @table = x
@@ -147,7 +145,7 @@ class OpenStruct
   end
 
   #
-  # #modifiable is used internally to check if the OpenStruct is able to be
+  # Used internally to check if the OpenStruct is able to be
   # modified before granting access to the internal Hash table to be modified.
   #
   def modifiable
@@ -161,34 +159,53 @@ class OpenStruct
   protected :modifiable
 
   #
-  # new_ostruct_member is used internally to defined properties on the
+  # Used internally to defined properties on the
   # OpenStruct. It does this by using the metaprogramming function
-  # define_method for both the getter method and the setter method.
+  # define_singleton_method for both the getter method and the setter method.
   #
   def new_ostruct_member(name)
     name = name.to_sym
-    unless self.respond_to?(name)
-      class << self; self; end.class_eval do
-        define_method(name) { @table[name] }
-        define_method("#{name}=") { |x| modifiable[name] = x }
-      end
+    unless respond_to?(name)
+      define_singleton_method(name) { @table[name] }
+      define_singleton_method("#{name}=") { |x| modifiable[name] = x }
     end
     name
   end
+  protected :new_ostruct_member
 
   def method_missing(mid, *args) # :nodoc:
     mname = mid.id2name
     len = args.length
-    if mname.chomp!('=') && mid != :[]=
+    if mname.chomp!('=')
       if len != 1
         raise ArgumentError, "wrong number of arguments (#{len} for 1)", caller(1)
       end
       modifiable[new_ostruct_member(mname)] = args[0]
-    elsif len == 0 && mid != :[]
+    elsif len == 0
       @table[mid]
     else
       raise NoMethodError, "undefined method `#{mid}' for #{self}", caller(1)
     end
+  end
+
+  # Returns the value of a member.
+  #
+  #   person = OpenStruct.new('name' => 'John Smith', 'age' => 70)
+  #   person[:age] # => 70, same as ostruct.age
+  #
+  def [](name)
+    @table[name.to_sym]
+  end
+
+  #
+  # Sets the value of a member.
+  #
+  #   person = OpenStruct.new('name' => 'John Smith', 'age' => 70)
+  #   person[:age] = 42 # => equivalent to ostruct.age = 42
+  #   person.age # => 42
+  #
+  def []=(name, value)
+    modifiable[new_ostruct_member(name)] = value
   end
 
   #
@@ -240,11 +257,28 @@ class OpenStruct
 
   #
   # Compares this object and +other+ for equality.  An OpenStruct is equal to
-  # +other+ when +other+ is an OpenStruct and the two object's Hash tables are
+  # +other+ when +other+ is an OpenStruct and the two objects' Hash tables are
   # equal.
   #
   def ==(other)
-    return false unless(other.kind_of?(OpenStruct))
-    return @table == other.table
+    return false unless other.kind_of?(OpenStruct)
+    @table == other.table
+  end
+
+  #
+  # Compares this object and +other+ for equality.  An OpenStruct is eql? to
+  # +other+ when +other+ is an OpenStruct and the two objects' Hash tables are
+  # eql?.
+  #
+  def eql?(other)
+    return false unless other.kind_of?(OpenStruct)
+    @table.eql?(other.table)
+  end
+
+  # Compute a hash-code for this OpenStruct.
+  # Two hashes with the same content will have the same hash code
+  # (and will be eql?).
+  def hash
+    @table.hash
   end
 end

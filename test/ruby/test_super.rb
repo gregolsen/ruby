@@ -1,4 +1,5 @@
 require 'test/unit'
+require_relative 'envutil'
 
 class TestSuper < Test::Unit::TestCase
   class Base
@@ -132,9 +133,9 @@ class TestSuper < Test::Unit::TestCase
     assert_equal("A#tt", a.tt(12), "[ruby-core:3856]")
     e = assert_raise(RuntimeError, "[ruby-core:24244]") {
       lambda {
-        Class.new do
-          define_method(:a) {super}.call
-        end
+        Class.new {
+          define_method(:a) {super}
+        }.new.a
       }.call
     }
     assert_match(/implicit argument passing of super from method defined by define_method/, e.message)
@@ -183,5 +184,184 @@ class TestSuper < Test::Unit::TestCase
       mid.subseq
       mid.subseq
     end
+  end
+
+  module DoubleInclude
+    class Base
+      def foo
+        [:Base]
+      end
+    end
+
+    module Override
+      def foo
+        super << :Override
+      end
+    end
+
+    class A < Base
+    end
+
+    class B < A
+    end
+
+    B.send(:include, Override)
+    A.send(:include, Override)
+  end
+
+  # [Bug #3351]
+  def test_double_include
+    assert_equal([:Base, :Override], DoubleInclude::B.new.foo)
+    # should be changed as follows?
+    # assert_equal([:Base, :Override, :Override], DoubleInclude::B.new.foo)
+  end
+
+  module DoubleInclude2
+    class Base
+      def foo
+        [:Base]
+      end
+    end
+
+    module Override
+      def foo
+        super << :Override
+      end
+    end
+
+    class A < Base
+      def foo
+        super << :A
+      end
+    end
+
+    class B < A
+      def foo
+        super << :B
+      end
+    end
+
+    B.send(:include, Override)
+    A.send(:include, Override)
+  end
+
+  def test_double_include2
+    assert_equal([:Base, :Override, :A, :Override, :B],
+                 DoubleInclude2::B.new.foo)
+  end
+
+  def test_super_in_instance_eval
+    super_class = Class.new {
+      def foo
+        return [:super, self]
+      end
+    }
+    sub_class = Class.new(super_class) {
+      def foo
+        x = Object.new
+        x.instance_eval do
+          super()
+        end
+      end
+    }
+    obj = sub_class.new
+    assert_raise(NotImplementedError) do
+      obj.foo
+    end
+  end
+
+  def test_super_in_instance_eval_with_define_method
+    super_class = Class.new {
+      def foo
+        return [:super, self]
+      end
+    }
+    sub_class = Class.new(super_class) {
+      define_method(:foo) do
+        x = Object.new
+        x.instance_eval do
+          super()
+        end
+      end
+    }
+    obj = sub_class.new
+    assert_raise(NotImplementedError) do
+      obj.foo
+    end
+  end
+
+  def test_super_in_orphan_block
+    super_class = Class.new {
+      def foo
+        return [:super, self]
+      end
+    }
+    sub_class = Class.new(super_class) {
+      def foo
+        x = Object.new
+        lambda { super() }
+      end
+    }
+    obj = sub_class.new
+    assert_equal([:super, obj], obj.foo.call)
+  end
+
+  def test_super_in_orphan_block_with_instance_eval
+    super_class = Class.new {
+      def foo
+        return [:super, self]
+      end
+    }
+    sub_class = Class.new(super_class) {
+      def foo
+        x = Object.new
+        x.instance_eval do
+          lambda { super() }
+        end
+      end
+    }
+    obj = sub_class.new
+    assert_raise(NotImplementedError) do
+      obj.foo.call
+    end
+  end
+
+  def test_yielding_super
+    a = Class.new { def yielder; yield; end }
+    x = Class.new { define_singleton_method(:hello) { 'hi' } }
+    y = Class.new(x) {
+      define_singleton_method(:hello) {
+        m = a.new
+        m.yielder { super() }
+      }
+    }
+    assert_equal 'hi', y.hello
+  end
+
+  def test_super_in_thread
+    hoge = Class.new {
+      def bar; 'hoge'; end
+    }
+    foo = Class.new(hoge) {
+      def bar; Thread.new { super }.join.value; end
+    }
+
+    assert_equal 'hoge', foo.new.bar
+  end
+
+  def assert_super_in_block(type)
+    bug7064 = '[ruby-core:47680]'
+    assert_normal_exit "#{type} {super}", bug7064
+  end
+
+  def test_super_in_at_exit
+    assert_super_in_block("at_exit")
+  end
+  def test_super_in_END
+    assert_super_in_block("END")
+  end
+
+  def test_super_in_BEGIN
+    assert_super_in_block("BEGIN")
   end
 end

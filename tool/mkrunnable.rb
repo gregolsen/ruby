@@ -1,4 +1,5 @@
 #!./miniruby
+# -*- coding: us-ascii -*-
 
 require 'mkmf'
 
@@ -34,7 +35,7 @@ end
 
 alias ln_dir_safe ln_safe
 
-if /mingw|mswin/ =~ RUBY_PLATFORM
+if /mingw|mswin/ =~ RbConfig::CONFIG["build_os"]
   extend Mswin
 end
 
@@ -42,7 +43,10 @@ config = RbConfig::CONFIG
 extout = ARGV[0] || config["EXTOUT"]
 version = config["ruby_version"]
 arch = config["arch"]
-["bin", "lib"].each do |dir|
+bindir = File.basename(config["bindir"])
+libdir = File.basename(config["libdir"])
+archdir = File.join(extout, arch)
+[bindir, libdir, archdir].each do |dir|
   File.directory?(dir) or mkdir_p(dir)
 end
 
@@ -53,16 +57,16 @@ goruby_install_name = "go" + ruby_install_name
 [ruby_install_name, rubyw_install_name, goruby_install_name].map do |ruby|
   ruby += exeext
   if ruby and !ruby.empty?
-    ln_safe("../#{ruby}", "bin/#{ruby}")
+    ln_safe("../#{ruby}", "#{bindir}/#{ruby}")
   end
 end
 libruby = config.values_at("LIBRUBY_A", "LIBRUBY_SO")
 libruby.concat(config["LIBRUBY_ALIASES"].split)
-libruby.each {|lib|ln_safe("../#{lib}", "lib/#{lib}")}
+libruby.each {|lib|ln_safe("../#{lib}", "#{libdir}/#{lib}")}
 if File.expand_path(extout) == extout
-  ln_dir_safe(extout, "lib/ruby")
+  ln_dir_safe(extout, "#{libdir}/ruby")
 else
-  ln_dir_safe(File.join("..", extout), "lib/ruby")
+  ln_dir_safe(File.join("..", extout), "#{libdir}/ruby")
   cur = "#{extout}/".gsub(/(\A|\/)(?:\.\/)+/, '\1').tr_s('/', '/')
   nil while cur.sub!(/[^\/]+\/\.\.\//, '')
   if /(\A|\/)\.\.\// =~ cur
@@ -72,9 +76,9 @@ else
   end
 end
 if cur
-  ln_safe(File.join("..", cur, "rbconfig.rb"), File.join(extout, arch, "rbconfig.rb"))
+  ln_safe(File.join("..", cur, "rbconfig.rb"), File.join(archdir, "rbconfig.rb"))
 else
-  ln_safe(File.expand_path("rbconfig.rb"), File.join(extout, arch, "rbconfig.rb"))
+  ln_safe(File.expand_path("rbconfig.rb"), File.join(archdir, "rbconfig.rb"))
 end
 ln_dir_safe("common", File.join(extout, version))
 ln_dir_safe(File.join("..", arch), File.join(extout, "common", arch))

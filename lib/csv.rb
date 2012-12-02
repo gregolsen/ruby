@@ -973,6 +973,7 @@ class CSV
   # <b><tt>:header_converters</tt></b>::  +nil+
   # <b><tt>:skip_blanks</tt></b>::        +false+
   # <b><tt>:force_quotes</tt></b>::       +false+
+  # <b><tt>:skip_lines</tt></b>::         +nil+
   #
   DEFAULT_OPTIONS = { col_sep:            ",",
                       row_sep:            :auto,
@@ -984,7 +985,8 @@ class CSV
                       return_headers:     false,
                       header_converters:  nil,
                       skip_blanks:        false,
-                      force_quotes:       false }.freeze
+                      force_quotes:       false,
+                      skip_lines:         nil }.freeze
 
   #
   # This method will return a CSV instance, just like CSV::new(), but the
@@ -1554,6 +1556,14 @@ class CSV
   #                                       skip over any rows with no content.
   # <b><tt>:force_quotes</tt></b>::       When set to a +true+ value, CSV will
   #                                       quote all CSV fields it creates.
+  # <b><tt>:skip_lines</tt></b>::         When set to an object responding to
+  #                                       <tt>match</tt>, every line matching
+  #                                       it is considered a comment and ignored
+  #                                       during parsing. When set to +nil+
+  #                                       no line is considered a comment.
+  #                                       If the passed object does not respond
+  #                                       to <tt>match</tt>, <tt>ArgumentError</tt>
+  #                                       is thrown.
   #
   # See CSV::DEFAULT_OPTIONS for the default settings.
   #
@@ -1591,6 +1601,7 @@ class CSV
     init_parsers(options)
     init_converters(options)
     init_headers(options)
+    init_comments(options)
 
     options.delete(:encoding)
     options.delete(:internal_encoding)
@@ -1620,6 +1631,10 @@ class CSV
   attr_reader :quote_char
   # The limit for field size, if any.  See CSV::new for details.
   attr_reader :field_size_limit
+
+  # The regex marking a line as a comment. See CSV::new for details
+  attr_reader :skip_lines
+
   #
   # Returns the current list of converters in effect.  See CSV::new for details.
   # Built-in converters will be returned by name, while others will be returned
@@ -1872,6 +1887,8 @@ class CSV
           end
         end
       end
+
+      next if @skip_lines and @skip_lines.match parse
 
       parts =  parse.split(@col_sep, -1)
       if parts.empty?
@@ -2189,6 +2206,17 @@ class CSV
     init_converters(options, :header_converters)
   end
 
+  # Stores the pattern of comments to skip from the provided options.
+  #
+  # The pattern must respond to +.match+, else ArgumentError is raised.
+  #
+  # See also CSV.new
+  def init_comments(options)
+    @skip_lines = options.delete(:skip_lines)
+    if @skip_lines and not @skip_lines.respond_to?(:match)
+      raise ArgumentError, ":skip_lines has to respond to matches"
+    end
+  end
   #
   # The actual work method for adding converters, used by both CSV.convert() and
   # CSV.header_convert().
@@ -2319,8 +2347,8 @@ class CSV
 
   private
 
-  # 
-  # Returns the encoding of the internal IO object or the +default+ if the 
+  #
+  # Returns the encoding of the internal IO object or the +default+ if the
   # encoding cannot be determined.
   #
   def raw_encoding(default = Encoding::ASCII_8BIT)
@@ -2336,20 +2364,41 @@ class CSV
   end
 end
 
-# Another name for CSV::instance().
+# Passes +args+ to CSV::instance.
+#
+#   CSV("CSV,data").read
+#     #=> [["CSV", "data"]]
+#
+# If a block is given, the instance is passed the block and the return value
+# becomes the return value of the block.
+#
+#   CSV("CSV,data") { |c|
+#     c.read.any? { |a| a.include?("data") }
+#   } #=> true
+#
+#   CSV("CSV,data") { |c|
+#     c.read.any? { |a| a.include?("zombies") }
+#   } #=> false
+#
 def CSV(*args, &block)
   CSV.instance(*args, &block)
 end
 
-class Array
-  # Equivalent to <tt>CSV::generate_line(self, options)</tt>.
+class Array # :nodoc:
+  # Equivalent to CSV::generate_line(self, options)
+  #
+  #   ["CSV", "data"].to_csv
+  #     #=> "CSV,data\n"
   def to_csv(options = Hash.new)
     CSV.generate_line(self, options)
   end
 end
 
-class String
-  # Equivalent to <tt>CSV::parse_line(self, options)</tt>.
+class String # :nodoc:
+  # Equivalent to CSV::parse_line(self, options)
+  #
+  #   "CSV,data".parse_csv
+  #     #=> ["CSV", "data"]
   def parse_csv(options = Hash.new)
     CSV.parse_line(self, options)
   end

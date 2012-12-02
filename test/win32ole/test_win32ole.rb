@@ -1,4 +1,4 @@
-#
+# coding: us-ascii
 
 begin
   require 'win32ole'

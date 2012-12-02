@@ -15,7 +15,9 @@
 #include "ruby/st.h"
 #include "ruby/util.h"
 #include "ruby/encoding.h"
+#include "internal.h"
 #include <errno.h>
+#include "probes.h"
 
 #ifdef __APPLE__
 #include <crt_externs.h>
@@ -207,12 +209,21 @@ rb_hash_foreach(VALUE hash, int (*func)(ANYARGS), VALUE farg)
 static VALUE
 hash_alloc(VALUE klass)
 {
-    NEWOBJ(hash, struct RHash);
-    OBJSETUP(hash, klass, T_HASH);
+    NEWOBJ_OF(hash, struct RHash, klass, T_HASH);
 
     RHASH_IFNONE(hash) = Qnil;
 
     return (VALUE)hash;
+}
+
+static VALUE
+empty_hash_alloc(VALUE klass)
+{
+    if(RUBY_DTRACE_HASH_CREATE_ENABLED()) {
+	RUBY_DTRACE_HASH_CREATE(0, rb_sourcefile(), rb_sourceline());
+    }
+
+    return hash_alloc(klass);
 }
 
 VALUE
@@ -224,8 +235,11 @@ rb_hash_new(void)
 VALUE
 rb_hash_dup(VALUE hash)
 {
-    NEWOBJ(ret, struct RHash);
-    DUPSETUP(ret, hash);
+    NEWOBJ_OF(ret, struct RHash,
+                rb_obj_class(hash),
+                (RBASIC(hash)->flags)&(T_MASK|FL_EXIVAR|FL_TAINT|FL_UNTRUSTED));
+    if (FL_TEST((hash), FL_EXIVAR))
+        rb_copy_generic_ivar((VALUE)(ret),(VALUE)(hash));
 
     if (!RHASH_EMPTY_P(hash))
         ret->ntbl = st_copy(RHASH(hash)->ntbl);
@@ -390,11 +404,22 @@ rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
 
 	    hash = hash_alloc(klass);
 	    for (i = 0; i < RARRAY_LEN(tmp); ++i) {
-		VALUE v = rb_check_array_type(RARRAY_PTR(tmp)[i]);
+		VALUE e = RARRAY_PTR(tmp)[i];
+		VALUE v = rb_check_array_type(e);
 		VALUE key, val = Qnil;
 
 		if (NIL_P(v)) {
-		    rb_raise(rb_eArgError, "wrong element type (expected array)");
+#if 0 /* refix in the next release */
+		    rb_raise(rb_eArgError, "wrong element type %s at %ld (expected array)",
+			     rb_builtin_class_name(e), i);
+
+#else
+		    rb_warn("wrong element type %s at %ld (expected array)",
+			    rb_builtin_class_name(e), i);
+		    rb_warn("ignoring wrong elements is deprecated, remove them explicitly");
+		    rb_warn("this causes ArgumentError in the next release");
+		    continue;
+#endif
 		}
 		switch (RARRAY_LEN(v)) {
 		  default:
@@ -813,8 +838,8 @@ rb_hash_delete_key(VALUE hash, VALUE key)
  *     hsh.delete(key)                   -> value
  *     hsh.delete(key) {| key | block }  -> value
  *
- *  Deletes and returns a key-value pair from <i>hsh</i> whose key is
- *  equal to <i>key</i>. If the key is not found, returns the
+ *  Deletes the key-value pair and returns the value from <i>hsh</i> whose
+ *  key is equal to <i>key</i>. If the key is not found, returns the
  *  <em>default value</em>. If the optional code block is given and the
  *  key is not found, pass in the key and return the result of
  *  <i>block</i>.
@@ -909,6 +934,8 @@ delete_if_i(VALUE key, VALUE value, VALUE hash)
     return ST_CONTINUE;
 }
 
+static VALUE rb_hash_size(VALUE hash);
+
 /*
  *  call-seq:
  *     hsh.delete_if {| key, value | block }  -> hsh
@@ -927,7 +954,7 @@ delete_if_i(VALUE key, VALUE value, VALUE hash)
 VALUE
 rb_hash_delete_if(VALUE hash)
 {
-    RETURN_ENUMERATOR(hash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, rb_hash_size);
     rb_hash_modify_check(hash);
     if (RHASH(hash)->ntbl)
 	rb_hash_foreach(hash, delete_if_i, hash);
@@ -948,7 +975,7 @@ rb_hash_reject_bang(VALUE hash)
 {
     st_index_t n;
 
-    RETURN_ENUMERATOR(hash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, rb_hash_size);
     rb_hash_modify(hash);
     if (!RHASH(hash)->ntbl)
         return Qnil;
@@ -1025,7 +1052,7 @@ rb_hash_select(VALUE hash)
 {
     VALUE result;
 
-    RETURN_ENUMERATOR(hash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, rb_hash_size);
     result = rb_hash_new();
     rb_hash_foreach(hash, select_i, result);
     return result;
@@ -1054,7 +1081,7 @@ rb_hash_select_bang(VALUE hash)
 {
     st_index_t n;
 
-    RETURN_ENUMERATOR(hash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, rb_hash_size);
     rb_hash_modify_check(hash);
     if (!RHASH(hash)->ntbl)
         return Qnil;
@@ -1079,7 +1106,7 @@ rb_hash_select_bang(VALUE hash)
 VALUE
 rb_hash_keep_if(VALUE hash)
 {
-    RETURN_ENUMERATOR(hash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, rb_hash_size);
     rb_hash_modify_check(hash);
     if (RHASH(hash)->ntbl)
 	rb_hash_foreach(hash, keep_if_i, hash);
@@ -1103,7 +1130,7 @@ clear_i(VALUE key, VALUE value, VALUE dummy)
  *
  */
 
-static VALUE
+VALUE
 rb_hash_clear(VALUE hash)
 {
     rb_hash_modify_check(hash);
@@ -1180,6 +1207,30 @@ replace_i(VALUE key, VALUE val, VALUE hash)
     rb_hash_aset(hash, key, val);
 
     return ST_CONTINUE;
+}
+
+static VALUE
+rb_hash_initialize_copy(VALUE hash, VALUE hash2)
+{
+    rb_hash_modify_check(hash);
+    hash2 = to_hash(hash2);
+
+    Check_Type(hash2, T_HASH);
+
+    if (!RHASH_EMPTY_P(hash2)) {
+        RHASH(hash)->ntbl = st_copy(RHASH(hash2)->ntbl);
+	rb_hash_rehash(hash);
+    }
+
+    if (FL_TEST(hash2, HASH_PROC_DEFAULT)) {
+        FL_SET(hash, HASH_PROC_DEFAULT);
+    }
+    else {
+	FL_UNSET(hash, HASH_PROC_DEFAULT);
+    }
+    RHASH_IFNONE(hash) = RHASH_IFNONE(hash2);
+
+    return hash;
 }
 
 /*
@@ -1284,7 +1335,7 @@ each_value_i(VALUE key, VALUE value)
 static VALUE
 rb_hash_each_value(VALUE hash)
 {
-    RETURN_ENUMERATOR(hash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, rb_hash_size);
     rb_hash_foreach(hash, each_value_i, 0);
     return hash;
 }
@@ -1317,7 +1368,7 @@ each_key_i(VALUE key, VALUE value)
 static VALUE
 rb_hash_each_key(VALUE hash)
 {
-    RETURN_ENUMERATOR(hash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, rb_hash_size);
     rb_hash_foreach(hash, each_key_i, 0);
     return hash;
 }
@@ -1354,7 +1405,7 @@ each_pair_i(VALUE key, VALUE value)
 static VALUE
 rb_hash_each_pair(VALUE hash)
 {
-    RETURN_ENUMERATOR(hash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, rb_hash_size);
     rb_hash_foreach(hash, each_pair_i, 0);
     return hash;
 }
@@ -2521,12 +2572,30 @@ env_keys(void)
  * An Enumerator is returned if no block is given.
  */
 static VALUE
+rb_env_size(VALUE ehash)
+{
+    char **env;
+    long cnt = 0;
+
+    rb_secure(4);
+
+    env = GET_ENVIRON(environ);
+    for (; *env ; ++env) {
+	if (strchr(*env, '=')) {
+	    cnt++;
+	}
+    }
+    FREE_ENVIRON(environ);
+    return LONG2FIX(cnt);
+}
+
+static VALUE
 env_each_key(VALUE ehash)
 {
     VALUE keys;
     long i;
 
-    RETURN_ENUMERATOR(ehash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(ehash, 0, 0, rb_env_size);
     keys = env_keys();	/* rb_secure(4); */
     for (i=0; i<RARRAY_LEN(keys); i++) {
 	rb_yield(RARRAY_PTR(keys)[i]);
@@ -2575,7 +2644,7 @@ env_each_value(VALUE ehash)
     VALUE values;
     long i;
 
-    RETURN_ENUMERATOR(ehash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(ehash, 0, 0, rb_env_size);
     values = env_values();	/* rb_secure(4); */
     for (i=0; i<RARRAY_LEN(values); i++) {
 	rb_yield(RARRAY_PTR(values)[i]);
@@ -2601,7 +2670,7 @@ env_each_pair(VALUE ehash)
     VALUE ary;
     long i;
 
-    RETURN_ENUMERATOR(ehash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(ehash, 0, 0, rb_env_size);
 
     rb_secure(4);
     ary = rb_ary_new();
@@ -2638,7 +2707,7 @@ env_reject_bang(VALUE ehash)
     long i;
     int del = 0;
 
-    RETURN_ENUMERATOR(ehash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(ehash, 0, 0, rb_env_size);
     keys = env_keys();	/* rb_secure(4); */
     for (i=0; i<RARRAY_LEN(keys); i++) {
 	VALUE val = rb_f_getenv(Qnil, RARRAY_PTR(keys)[i]);
@@ -2666,7 +2735,7 @@ env_reject_bang(VALUE ehash)
 static VALUE
 env_delete_if(VALUE ehash)
 {
-    RETURN_ENUMERATOR(ehash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(ehash, 0, 0, rb_env_size);
     env_reject_bang(ehash);
     return envtbl;
 }
@@ -2707,7 +2776,7 @@ env_select(VALUE ehash)
     VALUE result;
     char **env;
 
-    RETURN_ENUMERATOR(ehash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(ehash, 0, 0, rb_env_size);
     rb_secure(4);
     result = rb_hash_new();
     env = GET_ENVIRON(environ);
@@ -2741,7 +2810,7 @@ env_select_bang(VALUE ehash)
     long i;
     int del = 0;
 
-    RETURN_ENUMERATOR(ehash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(ehash, 0, 0, rb_env_size);
     keys = env_keys();	/* rb_secure(4); */
     for (i=0; i<RARRAY_LEN(keys); i++) {
 	VALUE val = rb_f_getenv(Qnil, RARRAY_PTR(keys)[i]);
@@ -2769,7 +2838,7 @@ env_select_bang(VALUE ehash)
 static VALUE
 env_keep_if(VALUE ehash)
 {
-    RETURN_ENUMERATOR(ehash, 0, 0);
+    RETURN_SIZED_ENUMERATOR(ehash, 0, 0, rb_env_size);
     env_select_bang(ehash);
     return envtbl;
 }
@@ -3355,11 +3424,11 @@ Init_Hash(void)
 
     rb_include_module(rb_cHash, rb_mEnumerable);
 
-    rb_define_alloc_func(rb_cHash, hash_alloc);
+    rb_define_alloc_func(rb_cHash, empty_hash_alloc);
     rb_define_singleton_method(rb_cHash, "[]", rb_hash_s_create, -1);
     rb_define_singleton_method(rb_cHash, "try_convert", rb_hash_s_try_convert, 1);
     rb_define_method(rb_cHash,"initialize", rb_hash_initialize, -1);
-    rb_define_method(rb_cHash,"initialize_copy", rb_hash_replace, 1);
+    rb_define_method(rb_cHash,"initialize_copy", rb_hash_initialize_copy, 1);
     rb_define_method(rb_cHash,"rehash", rb_hash_rehash, 0);
 
     rb_define_method(rb_cHash,"to_hash", rb_hash_to_hash, 0);

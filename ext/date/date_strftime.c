@@ -53,7 +53,8 @@ date_strftime_with_tmx(char *s, size_t maxsize, const char *format,
     auto char tbuf[100];
     ptrdiff_t i;
     int v, w;
-    int precision, flags, colons;
+    size_t colons;
+    int precision, flags;
     char padding;
     /* LOCALE_[OE] and COLONS are actually modifiers, not flags */
     enum {LEFT, CHCASE, LOWER, UPPER, LOCALE_O, LOCALE_E, COLONS};
@@ -346,7 +347,7 @@ date_strftime_with_tmx(char *s, size_t maxsize, const char *format,
 	    i = 2;
 	    break;
 
-	  case 'Q':	/* microseconds since Unix epoch */
+	  case 'Q':	/* milliseconds since Unix epoch */
 	    FMTV('0', 1, "d", tmx_msecs);
 	    continue;
 

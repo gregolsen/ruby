@@ -793,7 +793,7 @@ cont_restore_0(rb_context_t *cont, VALUE *addr_in_prev_frame)
     cont_restore_1(cont);
 }
 #ifdef __ia64
-#define cont_restore_0(cont, vp) register_stack_extend((cont), (vp), (VALUE*)rb_ia64_bsp());
+#define cont_restore_0(cont, vp) register_stack_extend((cont), (vp), (VALUE*)rb_ia64_bsp())
 #endif
 
 /*
@@ -929,6 +929,9 @@ rb_cont_call(int argc, VALUE *argv, VALUE contval)
     cont->argc = argc;
     cont->value = make_passing_arg(argc, argv);
 
+    /* restore `tracing' context. see [Feature #4347] */
+    th->trace_running = cont->saved_thread.trace_running;
+
     cont_restore_0(cont, &contval);
     return Qnil; /* unreachable */
 }
@@ -1058,7 +1061,9 @@ fiber_init(VALUE fibval, VALUE proc)
     th->cfp--;
     th->cfp->pc = 0;
     th->cfp->sp = th->stack + 1;
-    th->cfp->bp = 0;
+#if VM_DEBUG_BP_CHECK
+    th->cfp->bp_check = 0;
+#endif
     th->cfp->ep = th->stack;
     *th->cfp->ep = VM_ENVVAL_BLOCK_PTR(0);
     th->cfp->self = Qnil;
@@ -1158,7 +1163,7 @@ rb_fiber_start(void)
 	th->root_svar = Qnil;
 
 	fib->status = RUNNING;
-	cont->value = rb_vm_invoke_proc(th, proc, proc->block.self, argc, argv, 0);
+	cont->value = rb_vm_invoke_proc(th, proc, argc, argv, 0);
     }
     TH_POP_TAG();
 
@@ -1316,6 +1321,10 @@ fiber_switch(VALUE fibval, int argc, VALUE *argv, int is_resume)
 
     if (is_resume) {
 	fib->prev = rb_fiber_current();
+    }
+    else {
+	/* restore `tracing' context. see [Feature #4347] */
+	th->trace_running = cont->saved_thread.trace_running;
     }
 
     cont->argc = argc;

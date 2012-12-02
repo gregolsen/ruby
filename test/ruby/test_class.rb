@@ -187,6 +187,8 @@ class TestClass < Test::Unit::TestCase
 
   def test_singleton_class
     assert_raise(TypeError) { 1.extend(Module.new) }
+    assert_raise(TypeError) { 1.0.extend(Module.new) }
+    assert_raise(TypeError) { (2.0**1000).extend(Module.new) }
     assert_raise(TypeError) { :foo.extend(Module.new) }
 
     assert_in_out_err([], <<-INPUT, %w(:foo :foo true true), [])
@@ -203,6 +205,8 @@ class TestClass < Test::Unit::TestCase
   def test_uninitialized
     assert_raise(TypeError) { Class.allocate.new }
     assert_raise(TypeError) { Class.allocate.superclass }
+    bug6863 = '[ruby-core:47148]'
+    assert_raise(TypeError, bug6863) { Class.new(Class.allocate) }
   end
 
   def test_nonascii_name

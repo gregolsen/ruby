@@ -38,9 +38,10 @@ class OpenSSL::TestX509Certificate < Test::Unit::TestCase
     ]
 
     sha1 = OpenSSL::Digest::SHA1.new
-    dss1 = OpenSSL::Digest::DSS1.new
+    dsa_digest = OpenSSL::TestUtils::DSA_SIGNATURE_DIGEST.new
+
     [
-      [@rsa1024, sha1], [@rsa2048, sha1], [@dsa256, dss1], [@dsa512, dss1],
+      [@rsa1024, sha1], [@rsa2048, sha1], [@dsa256, dsa_digest], [@dsa512, dsa_digest]
     ].each{|pk, digest|
       cert = issue_cert(@ca, pk, 1, Time.now, Time.now+3600, exts,
                         nil, nil, digest)
@@ -145,7 +146,7 @@ class OpenSSL::TestX509Certificate < Test::Unit::TestCase
     assert_equal(false, cert.verify(@rsa2048))
 
     cert = issue_cert(@ca, @dsa512, 1, Time.now, Time.now+3600, [],
-                      nil, nil, OpenSSL::Digest::DSS1.new)
+                      nil, nil, OpenSSL::TestUtils::DSA_SIGNATURE_DIGEST.new)
     assert_equal(false, certificate_error_returns_false { cert.verify(@rsa1024) })
     assert_equal(false, certificate_error_returns_false { cert.verify(@rsa2048) })
     assert_equal(false, cert.verify(@dsa256))
@@ -166,20 +167,20 @@ class OpenSSL::TestX509Certificate < Test::Unit::TestCase
     end
 
     assert_raise(OpenSSL::X509::CertificateError){
-      cert = issue_cert(@ca, @dsa512, 1, Time.now, Time.now+3600, [],
-                        nil, nil, OpenSSL::Digest::MD5.new)
+      issue_cert(@ca, @dsa512, 1, Time.now, Time.now+3600, [],
+                 nil, nil, OpenSSL::Digest::MD5.new)
     }
   end
 
   def test_dsig_algorithm_mismatch
     assert_raise(OpenSSL::X509::CertificateError) do
-      cert = issue_cert(@ca, @rsa2048, 1, Time.now, Time.now+3600, [],
-                        nil, nil, OpenSSL::Digest::DSS1.new)
+      issue_cert(@ca, @rsa2048, 1, Time.now, Time.now+3600, [],
+                 nil, nil, OpenSSL::Digest::DSS1.new)
     end if OpenSSL::OPENSSL_VERSION_NUMBER < 0x10001000 # [ruby-core:42949]
 
     assert_raise(OpenSSL::X509::CertificateError) do
-      cert = issue_cert(@ca, @dsa512, 1, Time.now, Time.now+3600, [],
-                        nil, nil, OpenSSL::Digest::MD5.new)
+      issue_cert(@ca, @dsa512, 1, Time.now, Time.now+3600, [],
+                 nil, nil, OpenSSL::Digest::MD5.new)
     end
   end
 

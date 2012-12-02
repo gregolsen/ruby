@@ -1,3 +1,4 @@
+# -*- coding: us-ascii -*-
 # = ERB -- Ruby Templating
 #
 # Author:: Masatoshi SEKI
@@ -9,6 +10,8 @@
 # Copyright (c) 1999-2000,2002,2003 Masatoshi SEKI
 #
 # You can redistribute it and/or modify it under the same terms as Ruby.
+
+require "cgi/util"
 
 #
 # = ERB -- Ruby Templating
@@ -816,7 +819,7 @@ class ERB
   end
 
   # Generate results and print them. (see ERB#result)
-  def run(b=TOPLEVEL_BINDING)
+  def run(b=new_toplevel)
     print self.result(b)
   end
 
@@ -828,7 +831,7 @@ class ERB
   # _b_ accepts a Binding or Proc object which is used to set the context of
   # code evaluation.
   #
-  def result(b=TOPLEVEL_BINDING)
+  def result(b=new_toplevel)
     if @safe_level
       proc {
         $SAFE = @safe_level
@@ -838,6 +841,12 @@ class ERB
       eval(@src, b, (@filename || '(erb)'), 0)
     end
   end
+
+  def new_toplevel
+    # New binding each time *near* toplevel for unspecified runs
+    TOPLEVEL_BINDING.dup
+  end
+  private :new_toplevel
 
   # Define _methodname_ as instance method of _mod_ from compiled ruby source.
   #
@@ -909,7 +918,7 @@ class ERB
     #   is a &gt; 0 &amp; a &lt; 10?
     #
     def html_escape(s)
-      s.to_s.gsub(/&/, "&amp;").gsub(/\"/, "&quot;").gsub(/>/, "&gt;").gsub(/</, "&lt;")
+      CGI.escapeHTML(s.to_s)
     end
     alias h html_escape
     module_function :h

@@ -6,6 +6,7 @@ RUNCMD = $(SHELL)
 CHDIR = @CHDIR@
 exec = exec
 NULL = /dev/null
+PATH_SEPARATOR = @PATH_SEPARATOR@
 
 #### Start of system configuration section. ####
 
@@ -56,7 +57,7 @@ CFLAGS = @CFLAGS@ $(ARCH_FLAG)
 cflags = @cflags@
 optflags = @optflags@
 debugflags = @debugflags@
-warnflags = @warnflags@
+warnflags = @warnflags@ @strict_warnflags@
 INCFLAGS = -I. -I$(arch_hdrdir) -I$(hdrdir) -I$(srcdir)
 XCFLAGS = @XCFLAGS@
 CPPFLAGS = @CPPFLAGS@ $(INCFLAGS)
@@ -71,6 +72,7 @@ DLDFLAGS = @LIBRUBY_DLDFLAGS@ $(XLDFLAGS) $(ARCH_FLAG)
 SOLIBS = @SOLIBS@
 MAINLIBS = @MAINLIBS@
 ARCHMINIOBJS = @MINIOBJS@
+DLNOBJ = @DLNOBJ@
 ENCOBJS = @ENCOBJS@
 EXTOBJS = @EXTOBJS@
 BUILTIN_ENCOBJS = @BUILTIN_ENCOBJS@
@@ -89,7 +91,9 @@ PROGRAM=$(RUBY_INSTALL_NAME)$(EXEEXT)
 RUBY = $(RUBY_INSTALL_NAME)
 MINIRUBY = @MINIRUBY@\
 	$(MINIRUBYOPT)
-RUNRUBY = @RUNRUBY@ $(RUNRUBYOPT) -- $(RUN_OPTS)
+RUNRUBY_COMMAND = @RUNRUBY@ $(RUNRUBYOPT)
+RUNRUBY = $(RUNRUBY_COMMAND) -- $(RUN_OPTS)
+RUNRUBY_DEBUGGER = --debugger='gdb -x run.gdb --quiet --args'
 XRUBY = @XRUBY@
 BTESTRUBY = @BTESTRUBY@\
 	$(MINIRUBYOPT)
@@ -117,6 +121,7 @@ LIBRUBYARG    = @LIBRUBYARG@
 LIBRUBYARG_STATIC = @LIBRUBYARG_STATIC@
 LIBRUBYARG_SHARED = @LIBRUBYARG_SHARED@
 LIBRUBY_RELATIVE = @LIBRUBY_RELATIVE@
+LIBRUBY_A_OBJS = @LIBRUBY_A_OBJS@
 
 THREAD_MODEL  = @THREAD_MODEL@
 
@@ -145,6 +150,10 @@ OBJDUMP       = @OBJDUMP@
 OBJCOPY       = @OBJCOPY@
 VCS           = @VCS@
 VCSUP         = @VCSUP@
+DTRACE        = @DTRACE@
+DTRACE_EXT    = @DTRACE_EXT@
+DTRACE_OBJ   = @DTRACE_OBJ@
+DTRACE_GLOMMED_OBJ = @DTRACE_GLOMMED_OBJ@
 
 OBJEXT        = @OBJEXT@
 ASMEXT        = S
@@ -160,12 +169,17 @@ NEWLINE_C     = newline.c
 MINIPRELUDE_C = miniprelude.c
 
 SRC_FILE      = $<
+OS_SRC_FILE   = $<
+DEST_FILE     = $@
+OS_DEST_FILE  = $@
 
 MESSAGE_BEGIN = @for line in
 MESSAGE_END = ; do echo "$$line"; done
 
 configure_args = @configure_args@
 #### End of variables
+
+.SUFFIXES: .inc .h .c .y .i .$(DTRACE_EXT)
 
 all:
 
@@ -177,7 +191,7 @@ all:
 miniruby$(EXEEXT):
 		@-if test -f $@; then $(MV) -f $@ $@.old; $(RM) $@.old; fi
 		$(ECHO) linking $@
-		$(Q) $(PURIFY) $(CC) $(LDFLAGS) $(XLDFLAGS) $(MAINLIBS) $(NORMALMAINOBJ) $(MINIOBJS) $(COMMONOBJS) $(DMYEXT) $(LIBS) $(OUTFLAG)$@
+		$(Q) $(PURIFY) $(CC) $(LDFLAGS) $(XLDFLAGS) $(MAINLIBS) $(NORMALMAINOBJ) $(MINIOBJS) $(COMMONOBJS) $(DMYEXT) $(DTRACE_OBJ) $(LIBS) $(OUTFLAG)$@
 
 $(PROGRAM):
 		@$(RM) $@
@@ -191,7 +205,7 @@ $(PROGRAM):
 $(LIBRUBY_A):
 		@$(RM) $@
 		$(ECHO) linking static-library $@
-		$(Q) $(AR) $(ARFLAGS) $@ $(OBJS) $(DMYEXT)
+		$(Q) $(AR) $(ARFLAGS) $@ $(LIBRUBY_A_OBJS) $(DMYEXT)
 		@-$(RANLIB) $@ 2> /dev/null || true
 		$(ECHO) verifying static-library $@
 		@$(PURIFY) $(CC) $(XLDFLAGS) $(MAINOBJ) $(LIBRUBY_A) $(MAINLIBS) $(EXTLIBS) $(LIBS) $(OUTFLAG)conftest$(EXEEXT) $(LDFLAGS)
@@ -200,7 +214,7 @@ $(LIBRUBY_A):
 $(LIBRUBY_SO):
 		@-$(PRE_LIBRUBY_UPDATE)
 		$(ECHO) linking shared-library $@
-		$(Q) $(LDSHARED) $(DLDFLAGS) $(OBJS) $(DLDOBJS) $(SOLIBS) $(EXTSOLIBS) $(OUTFLAG)$@
+		$(Q) $(LDSHARED) $(DLDFLAGS) $(OBJS) $(DLDOBJS) $(DTRACE_OBJ) $(SOLIBS) $(EXTSOLIBS) $(OUTFLAG)$@
 		-$(Q) $(OBJCOPY) -w -L '$(SYMBOL_PREFIX)Init_*' -L '$(SYMBOL_PREFIX)*_threadptr_*' $@
 		@-$(MINIRUBY) -e 'ARGV.each{|link| File.delete link if File.exist? link; \
 						  File.symlink "$(LIBRUBY_SO)", link}' \
@@ -262,6 +276,7 @@ $(srcdir)/configure: $(srcdir)/configure.in
 	$(CHDIR) $(srcdir) && exec $(AUTOCONF)
 
 incs: id.h
+all-incs: probes.h
 
 # Things which should be considered:
 # * with gperf v.s. without gperf
@@ -317,6 +332,36 @@ enc/unicode/name2ctype.h: enc/unicode/name2ctype.kwd
 .c.i:
 	@$(ECHO) preprocessing $<
 	$(Q) $(CPP) $(warnflags) $(XCFLAGS) $(CPPFLAGS) $(COUTFLAG)$@ -E $< > $@
+
+.d.h:
+	@$(ECHO) translating probes $<
+	$(Q) $(DTRACE) -o $@.tmp -h -C $(INCFLAGS) -s $<
+	$(Q) sed -e 's/RUBY_/RUBY_DTRACE_/g' -e 's/PROBES_H_TMP/PROBES_H/g' -e 's/(char \*/(const char */g' -e 's/, char \*/, const char */g' $@.tmp > $@
+	$(Q) $(RM) $@.tmp
+
+.dmyh.h:
+	@$(ECHO) copying dummy $(DEST_FILE)
+	$(Q) $(CP) $(OS_SRC_FILE) $(OS_DEST_FILE)
+
+probes.@OBJEXT@: $(srcdir)/probes.d
+	@$(ECHO) processing probes in object files
+	$(Q) stamp="$*.stamp"; \
+	  if test -f "$$stamp" -o -f "$@"; then \
+	  $(RM) $(DTRACE_DEPENDENT_OBJS) "$$stamp"; \
+	  for o in $(DTRACE_DEPENDENT_OBJS); do \
+	    echo "rebuilding $$o which was modified by \"dtrace -G\""; \
+	    $(MAKE) "$$o"; \
+	  done; \
+	fi; \
+	touch "$$stamp"
+	$(RM) $@
+	$(Q) $(DTRACE) -G -C $(INCFLAGS) -s $(srcdir)/probes.d -o $@ $(DTRACE_DEPENDENT_OBJS)
+
+# DTrace static library hacks described here:
+# http://mail.opensolaris.org/pipermail/dtrace-discuss/2005-August/000207.html
+ruby-glommed.$(OBJEXT):
+	@$(ECHO) generating a glommed object with DTrace probes for static library
+	$(Q) $(LD) -r -o $@ $(OBJS) $(DTRACE_OBJ)
 
 clean-local::
 	$(Q)$(RM) ext/extinit.c ext/extinit.$(OBJEXT) ext/ripper/y.output \

@@ -44,7 +44,7 @@ class TestFile < Test::Unit::TestCase
     bug6487 = '[ruby-core:45203]'
     f = Tempfile.new(__method__.to_s)
     f.close
-    assert File.exist? f.path
+    assert_file.exist?(f.path)
     assert_nothing_raised(bug6487) {File.read(f.path, mode: 'r:utf-8')}
     assert_nothing_raised(bug6487) {File.read(f.path, mode: 'r:bom|utf-8')}
     f.close(true)
@@ -347,6 +347,16 @@ class TestFile < Test::Unit::TestCase
       assert_nothing_raised(Errno::ENOENT, feature3399) do
         File.stat("//?/#{path}")
       end
+    end
+  end
+
+  def test_open_nul
+    Dir.mktmpdir(__method__.to_s) do |tmpdir|
+      path = File.join(tmpdir, "foo")
+      assert_raise(ArgumentError) do
+        open(path + "\0bar", "w") {}
+      end
+      assert_file.not_exist?(path)
     end
   end
 end

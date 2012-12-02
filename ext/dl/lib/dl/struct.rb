@@ -1,4 +1,5 @@
 require 'dl'
+require 'dl/value'
 require 'dl/pack.rb'
 
 module DL
@@ -98,7 +99,7 @@ module DL
         last_offset = offset
 
         align = PackInfo::ALIGN_MAP[type]
-        offset = PackInfo.align(last_offset, align) + 
+        offset = PackInfo.align(last_offset, align) +
                  (PackInfo::SIZE_MAP[type] * count)
 
         align

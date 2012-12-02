@@ -384,8 +384,7 @@ static VALUE
 struct_alloc(VALUE klass)
 {
     long n;
-    NEWOBJ(st, struct RStruct);
-    OBJSETUP(st, klass, T_STRUCT);
+    NEWOBJ_OF(st, struct RStruct, klass, T_STRUCT);
 
     n = num_members(klass);
 
@@ -430,6 +429,9 @@ rb_struct_new(VALUE klass, ...)
     return rb_class_new_instance(size, mem, klass);
 }
 
+static VALUE
+rb_struct_size(VALUE s);
+
 /*
  *  call-seq:
  *     struct.each {|obj| block }  -> struct
@@ -456,7 +458,7 @@ rb_struct_each(VALUE s)
 {
     long i;
 
-    RETURN_ENUMERATOR(s, 0, 0);
+    RETURN_SIZED_ENUMERATOR(s, 0, 0, rb_struct_size);
     for (i=0; i<RSTRUCT_LEN(s); i++) {
 	rb_yield(RSTRUCT_PTR(s)[i]);
     }
@@ -490,10 +492,12 @@ rb_struct_each_pair(VALUE s)
     VALUE members;
     long i;
 
-    RETURN_ENUMERATOR(s, 0, 0);
+    RETURN_SIZED_ENUMERATOR(s, 0, 0, rb_struct_size);
     members = rb_struct_members(s);
     for (i=0; i<RSTRUCT_LEN(s); i++) {
-	rb_yield_values(2, rb_ary_entry(members, i), RSTRUCT_PTR(s)[i]);
+	VALUE key = rb_ary_entry(members, i);
+	VALUE value = RSTRUCT_PTR(s)[i];
+	rb_yield(rb_assoc_new(key, value));
     }
     return s;
 }
@@ -794,7 +798,7 @@ rb_struct_select(int argc, VALUE *argv, VALUE s)
     long i;
 
     rb_check_arity(argc, 0, 0);
-    RETURN_ENUMERATOR(s, 0, 0);
+    RETURN_SIZED_ENUMERATOR(s, 0, 0, rb_struct_size);
     result = rb_ary_new();
     for (i = 0; i < RSTRUCT_LEN(s); i++) {
 	if (RTEST(rb_yield(RSTRUCT_PTR(s)[i]))) {
@@ -901,7 +905,7 @@ recursive_eql(VALUE s, VALUE s2, int recur)
 }
 
 /*
- * code-seq:
+ * call-seq:
  *   struct.eql?(other)   -> true or false
  *
  * Two structures are equal if they are the same object, or if all their

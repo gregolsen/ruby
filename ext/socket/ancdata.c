@@ -86,8 +86,7 @@ ancillary_initialize(VALUE self, VALUE vfamily, VALUE vlevel, VALUE vtype, VALUE
 static VALUE
 ancdata_new(int family, int level, int type, VALUE data)
 {
-    NEWOBJ(obj, struct RObject);
-    OBJSETUP(obj, rb_cAncillaryData, T_OBJECT);
+    NEWOBJ_OF(obj, struct RObject, rb_cAncillaryData, T_OBJECT);
     StringValue(data);
     ancillary_initialize((VALUE)obj, INT2NUM(family), INT2NUM(level), INT2NUM(type), data);
     return (VALUE)obj;
@@ -1164,8 +1163,10 @@ bsock_sendmsg_internal(int argc, VALUE *argv, VALUE sock, int nonblock)
 #if defined(HAVE_ST_MSG_CONTROL)
 	int i;
 	size_t last_pad = 0;
+#if defined(__NetBSD__)
         int last_level = 0;
         int last_type = 0;
+#endif
         controls_str = rb_str_tmp_new(0);
         for (i = 0; i < controls_num; i++) {
             VALUE elt = controls_ptr[i], v;
@@ -1204,8 +1205,10 @@ bsock_sendmsg_internal(int argc, VALUE *argv, VALUE sock, int nonblock)
             cmh.cmsg_len = (socklen_t)CMSG_LEN(RSTRING_LEN(cdata));
             MEMCPY(cmsg, &cmh, char, sizeof(cmh));
             MEMCPY(cmsg+((char*)CMSG_DATA(&cmh)-(char*)&cmh), RSTRING_PTR(cdata), char, RSTRING_LEN(cdata));
+#if defined(__NetBSD__)
             last_level = cmh.cmsg_level;
             last_type = cmh.cmsg_type;
+#endif
 	    last_pad = cspace - cmh.cmsg_len;
         }
 	if (last_pad) {

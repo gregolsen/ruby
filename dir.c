@@ -85,6 +85,7 @@ char *strchr(char*,char);
 #define FNM_PATHNAME	0x02
 #define FNM_DOTMATCH	0x04
 #define FNM_CASEFOLD	0x08
+#define FNM_EXTGLOB	0x10
 #if CASEFOLD_FILESYSTEM
 #define FNM_SYSCASE	FNM_CASEFOLD
 #else
@@ -1171,6 +1172,7 @@ glob_make_pattern(const char *p, const char *e, int flags, rb_encoding *enc)
 {
     struct glob_pattern *list, *tmp, **tail = &list;
     int dirsep = 0; /* pattern is terminated with '/' */
+    int recursive = 0;
 
     while (p < e && *p) {
 	tmp = GLOB_ALLOC(struct glob_pattern);
@@ -1181,13 +1183,14 @@ glob_make_pattern(const char *p, const char *e, int flags, rb_encoding *enc)
 	    tmp->type = RECURSIVE;
 	    tmp->str = 0;
 	    dirsep = 1;
+	    recursive = 1;
 	}
 	else {
 	    const char *m = find_dirsep(p, e, flags, enc);
 	    int magic = has_magic(p, m, flags, enc);
 	    char *buf;
 
-	    if (!magic && *m) {
+	    if (!magic && !recursive && *m) {
 		const char *m2;
 		while (!has_magic(m+1, m2 = find_dirsep(m+1, e, flags, enc), flags, enc) &&
 		       *m2) {
@@ -1260,7 +1263,7 @@ join_path(const char *path, int dirsep, const char *name)
     return buf;
 }
 
-enum answer { YES, NO, UNKNOWN };
+enum answer {UNKNOWN = -1, NO, YES};
 
 #ifndef S_ISDIR
 #   define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
@@ -1379,15 +1382,24 @@ glob_helper(
 	if (dirp == NULL) return 0;
 
 	while (READDIR(dirp, enc, &STRUCT_DIRENT(entry), dp)) {
-	    char *buf = join_path(path, dirsep, dp->d_name);
+	    char *buf;
 	    enum answer new_isdir = UNKNOWN;
 
+	    if (recursive && dp->d_name[0] == '.') {
+		/* RECURSIVE never match dot files unless FNM_DOTMATCH is set */
+		if (!(flags & FNM_DOTMATCH)) continue;
+
+		/* always skip current and parent directories not to recurse infinitely */
+		if (!dp->d_name[1]) continue;
+		if (dp->d_name[1] == '.' && !dp->d_name[2]) continue;
+	    }
+
+	    buf = join_path(path, dirsep, dp->d_name);
 	    if (!buf) {
 		status = -1;
 		break;
 	    }
-	    if (recursive && strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0
-		&& fnmatch("*", rb_usascii_encoding(), dp->d_name, flags) == 0) {
+	    if (recursive) {
 #ifndef _WIN32
 		if (do_lstat(buf, &st, flags) == 0)
 		    new_isdir = S_ISDIR(st.st_mode) ? YES : S_ISLNK(st.st_mode) ? UNKNOWN : NO;
@@ -1771,7 +1783,7 @@ dir_s_aref(int argc, VALUE *argv, VALUE obj)
  *                          <code>/ .* /x</code> in regexp. Note, this
  *                          will not match Unix-like hidden files (dotfiles).
  *                          In order to include those in the match results,
- *                          you must use something like "{*,.*}".
+ *                          you must use something like <code>"{*,.*}"</code>.
  *  <code>**</code>::       Matches directories recursively.
  *  <code>?</code>::        Matches any one character. Equivalent to
  *                          <code>/.{1}/</code> in regexp.
@@ -1785,10 +1797,11 @@ dir_s_aref(int argc, VALUE *argv, VALUE obj)
  *                          More than two literals may be specified.
  *                          Equivalent to pattern alternation in
  *                          regexp.
- *  <code> \ </code>::      Escapes the next metacharacter.
- *                          Note that this means you cannot use backslash in windows
- *                          as part of a glob, i.e. Dir["c:\\foo*"] will not work
- *                          use Dir["c:/foo*"] instead
+ *  <code> \\ </code>::     Escapes the next metacharacter.
+ *                          Note that this means you cannot use backslash
+ *                          in windows as part of a glob,
+ *                          i.e. <code>Dir["c:\\foo*"]</code> will not work,
+ *                          use <code>Dir["c:/foo*"]</code> instead.
  *
  *     Dir["config.?"]                     #=> ["config.h"]
  *     Dir.glob("config.?")                #=> ["config.h"]
@@ -1900,6 +1913,15 @@ dir_entries(int argc, VALUE *argv, VALUE io)
     return rb_ensure(rb_Array, dir, dir_close, dir);
 }
 
+static int
+fnmatch_brace(const char *pattern, VALUE val, void *enc)
+{
+    struct brace_args *arg = (struct brace_args *)val;
+    VALUE path = arg->value;
+
+    return (fnmatch(pattern, enc, RSTRING_PTR(path), arg->flags) == 0);
+}
+
 /*
  *  call-seq:
  *     File.fnmatch( pattern, path, [flags] ) -> (true or false)
@@ -1996,9 +2018,21 @@ file_s_fnmatch(int argc, VALUE *argv, VALUE obj)
     StringValue(pattern);
     FilePathStringValue(path);
 
-    if (fnmatch(RSTRING_PTR(pattern), rb_enc_get(pattern), RSTRING_PTR(path),
-		flags) == 0)
-	return Qtrue;
+    if (flags & FNM_EXTGLOB) {
+	struct brace_args args;
+
+	args.value = path;
+	args.flags = flags;
+	if (ruby_brace_expand(RSTRING_PTR(pattern), flags, fnmatch_brace,
+			      (VALUE)&args, rb_enc_get(pattern)) > 0)
+	    return Qtrue;
+    }
+    else {
+	if (fnmatch(RSTRING_PTR(pattern), rb_enc_get(pattern), RSTRING_PTR(path),
+		    flags) == 0)
+	    return Qtrue;
+    }
+    RB_GC_GUARD(pattern);
 
     return Qfalse;
 }
@@ -2099,5 +2133,6 @@ Init_Dir(void)
     rb_file_const("FNM_PATHNAME", INT2FIX(FNM_PATHNAME));
     rb_file_const("FNM_DOTMATCH", INT2FIX(FNM_DOTMATCH));
     rb_file_const("FNM_CASEFOLD", INT2FIX(FNM_CASEFOLD));
+    rb_file_const("FNM_EXTGLOB", INT2FIX(FNM_EXTGLOB));
     rb_file_const("FNM_SYSCASE", INT2FIX(FNM_SYSCASE));
 }

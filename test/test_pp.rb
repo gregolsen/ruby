@@ -107,10 +107,6 @@ class PPInspectTest < Test::Unit::TestCase
     a.instance_eval { @a = nil }
     result = PP.pp(a, '')
     assert_equal("#{a.inspect}\n", result)
-    a = 1.0
-    a.instance_eval { @a = nil }
-    result = PP.pp(a, '')
-    assert_equal("#{a.inspect}\n", result)
   end
 
   def test_to_s_without_iv
@@ -118,7 +114,6 @@ class PPInspectTest < Test::Unit::TestCase
     def a.to_s() "aaa" end
     result = PP.pp(a, '')
     assert_equal("#{a.inspect}\n", result)
-    assert_equal("aaa\n", result)
   end
 end
 

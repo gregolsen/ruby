@@ -370,11 +370,7 @@ module Test
       def after_worker_down(worker, e=nil, c=false)
         return unless @options[:parallel]
         return if @interrupt
-        if e
-          b = e.backtrace
-          warn "#{b.shift}: #{e.message} (#{e.class})"
-          STDERR.print b.map{|s| "\tfrom #{s}"}.join("\n")
-        end
+        warn e if e
         @need_quit = true
         warn ""
         warn "Some worker was crashed. It seems ruby interpreter's bug"
@@ -620,15 +616,20 @@ module Test
               _run_suites(suites, type)
             end
           end
+          unless @options[:retry]
+            del_status_line or puts
+          end
           unless rep.empty?
             rep.each do |r|
               r[:report].each do |f|
-                report.push(puke(*f)) if f
+                puke(*f) if f
               end
             end
-            @errors   += rep.map{|x| x[:result][0] }.inject(:+)
-            @failures += rep.map{|x| x[:result][1] }.inject(:+)
-            @skips    += rep.map{|x| x[:result][2] }.inject(:+)
+            if @options[:retry]
+              @errors   += rep.map{|x| x[:result][0] }.inject(:+)
+              @failures += rep.map{|x| x[:result][1] }.inject(:+)
+              @skips    += rep.map{|x| x[:result][2] }.inject(:+)
+            end
           end
           unless @warnings.empty?
             warn ""
@@ -725,7 +726,10 @@ module Test
         @report_count ||= 0
         report.each do |msg|
           if msg.start_with? "Skipped:"
-            next if @options[:hide_skip]
+            if @options[:hide_skip]
+              del_status_line
+              next
+            end
             color = @skipped_color
           else
             color = @failed_color
@@ -800,6 +804,7 @@ module Test
       attr_accessor :to_run, :options
 
       def initialize(force_standalone = false, default_dir = nil, argv = ARGV)
+        @force_standalone = force_standalone
         @runner = Runner.new do |files, options|
           options[:base_directory] ||= default_dir
           files << default_dir if files.empty? and default_dir
@@ -809,6 +814,9 @@ module Test
         end
         Runner.runner = @runner
         @options = @runner.option_parser
+        if @force_standalone
+          @options.banner.sub!(/\[options\]/, '\& tests...')
+        end
         @argv = argv
       end
 
@@ -818,12 +826,24 @@ module Test
       end
 
       def run
+        if @force_standalone and not process_args(@argv)
+          abort @options.banner
+        end
         @runner.run(@argv) || true
       end
 
       def self.run(*args)
         new(*args).run
       end
+    end
+
+    class ProxyError < StandardError
+      def initialize(ex)
+        @message = ex.message
+        @backtrace = ex.backtrace
+      end
+
+      attr_accessor :message, :backtrace
     end
   end
 end

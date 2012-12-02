@@ -990,6 +990,14 @@ zstream_run_func(void *ptr)
 	    break;
 	}
 
+	if (z->stream.avail_in == 0 && z->func == &inflate_funcs) {
+	    /* break here because inflate() return Z_BUF_ERROR when avail_in == 0. */
+	    /* but deflate() could be called with avail_in == 0 (there's hidden buffer
+	       in zstream->state) */
+	    z->flags |= ZSTREAM_FLAG_IN_STREAM;
+	    break;
+	}
+
 	if (args->stream_output) {
 	    state = (int)(VALUE)rb_thread_call_with_gvl(zstream_expand_buffer_protect,
 							(void *)z);
@@ -1830,7 +1838,7 @@ rb_inflate_s_allocate(VALUE klass)
  * Greater than 15::
  *   Add 32 to window_bits to enable zlib and gzip decoding with automatic
  *   header detection, or add 16 to decode only the gzip format (a
- *   Zlib::DataError will be raised for a non-gzip stream). 
+ *   Zlib::DataError will be raised for a non-gzip stream).
  *
  * (-8..-15)::
  *   Enables raw deflate mode which will not generate a check value, and will

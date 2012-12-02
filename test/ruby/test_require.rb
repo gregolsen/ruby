@@ -105,6 +105,19 @@ class TestRequire < Test::Unit::TestCase
     assert(system(File.expand_path(EnvUtil.rubybin).sub(/\A(\w):/, '//127.0.0.1/\1$/'), "-rabbrev", "-e0"))
   end if /mswin|mingw/ =~ RUBY_PLATFORM
 
+  def test_require_twice
+    Dir.mktmpdir do |tmp|
+      req = File.join(tmp, "very_long_file_name.rb")
+      File.write(req, "p :ok\n")
+      assert_file.exist?(req)
+      req[/.rb$/i] = ""
+      assert_in_out_err(['--disable-gems'], <<-INPUT, %w(:ok), [])
+        require "#{req}"
+        require "#{req}"
+      INPUT
+    end
+  end
+
   def test_define_class
     begin
       require "socket"
@@ -404,5 +417,163 @@ class TestRequire < Test::Unit::TestCase
   ensure
     $".delete(path)
     tmp.close(true) if tmp
+  end
+
+  def test_loaded_features_encoding
+    bug6377 = '[ruby-core:44750]'
+    loadpath = $:.dup
+    features = $".dup
+    $".clear
+    $:.clear
+    Dir.mktmpdir {|tmp|
+      $: << tmp
+      open(File.join(tmp, "foo.rb"), "w") {}
+      require "foo"
+      assert_equal(tmp.encoding, $"[0].encoding, bug6377)
+    }
+  ensure
+    $:.replace(loadpath)
+    $".replace(features)
+  end
+
+  def test_require_changed_current_dir
+    bug7158 = '[ruby-core:47970]'
+    Dir.mktmpdir {|tmp|
+      Dir.chdir(tmp) {
+        Dir.mkdir("a")
+        Dir.mkdir("b")
+        open(File.join("a", "foo.rb"), "w") {}
+        open(File.join("b", "bar.rb"), "w") {|f|
+          f.puts "p :ok"
+        }
+        assert_in_out_err([], <<-INPUT, %w(:ok), [], bug7158)
+          $: << "."
+          Dir.chdir("a")
+          require "foo"
+          Dir.chdir("../b")
+          p :ng unless require "bar"
+          Dir.chdir("..")
+          p :ng if require "b/bar"
+        INPUT
+      }
+    }
+  end
+
+  def test_require_not_modified_load_path
+    bug7158 = '[ruby-core:47970]'
+    Dir.mktmpdir {|tmp|
+      Dir.chdir(tmp) {
+        open("foo.rb", "w") {}
+        assert_in_out_err([], <<-INPUT, %w(:ok), [], bug7158)
+          a = Object.new
+          def a.to_str
+            "#{tmp}"
+          end
+          $: << a
+          require "foo"
+          last_path = $:.pop
+          p :ok if last_path == a && last_path.class == Object
+        INPUT
+      }
+    }
+  end
+
+  def test_require_changed_home
+    bug7158 = '[ruby-core:47970]'
+    Dir.mktmpdir {|tmp|
+      Dir.chdir(tmp) {
+        open("foo.rb", "w") {}
+        Dir.mkdir("a")
+        open(File.join("a", "bar.rb"), "w") {}
+        assert_in_out_err([], <<-INPUT, %w(:ok), [], bug7158)
+          $: << '~'
+          ENV['HOME'] = "#{tmp}"
+          require "foo"
+          ENV['HOME'] = "#{tmp}/a"
+          p :ok if require "bar"
+        INPUT
+      }
+    }
+  end
+
+  def test_require_to_path_redefined_in_load_path
+    bug7158 = '[ruby-core:47970]'
+    Dir.mktmpdir {|tmp|
+      Dir.chdir(tmp) {
+        open("foo.rb", "w") {}
+        assert_in_out_err(["RUBYOPT"=>nil], <<-INPUT, %w(:ok), [], bug7158)
+          a = Object.new
+          def a.to_path
+            "bar"
+          end
+          $: << a
+          begin
+            require "foo"
+            p :ng
+          rescue LoadError
+          end
+          def a.to_path
+            "#{tmp}"
+          end
+          p :ok if require "foo"
+        INPUT
+      }
+    }
+  end
+
+  def test_require_to_str_redefined_in_load_path
+    bug7158 = '[ruby-core:47970]'
+    Dir.mktmpdir {|tmp|
+      Dir.chdir(tmp) {
+        open("foo.rb", "w") {}
+        assert_in_out_err(["RUBYOPT"=>nil], <<-INPUT, %w(:ok), [], bug7158)
+          a = Object.new
+          def a.to_str
+            "foo"
+          end
+          $: << a
+          begin
+            require "foo"
+            p :ng
+          rescue LoadError
+          end
+          def a.to_str
+            "#{tmp}"
+          end
+          p :ok if require "foo"
+        INPUT
+      }
+    }
+  end
+
+  def assert_require_with_shared_array_modified(add, del)
+    bug7383 = '[ruby-core:49518]'
+    Dir.mktmpdir {|tmp|
+      Dir.chdir(tmp) {
+        open("foo.rb", "w") {}
+        Dir.mkdir("a")
+        open(File.join("a", "bar.rb"), "w") {}
+        assert_in_out_err([], <<-INPUT, %w(:ok), [], bug7383)
+          $:.#{add} "#{tmp}"
+          $:.#{add} "#{tmp}/a"
+          require "foo"
+          $:.#{del}
+          # Expanded load path cache should be rebuilt.
+          begin
+            require "bar"
+          rescue LoadError
+            p :ok
+          end
+        INPUT
+      }
+    }
+  end
+
+  def test_require_with_array_pop
+    assert_require_with_shared_array_modified("push", "pop")
+  end
+
+  def test_require_with_array_shift
+    assert_require_with_shared_array_modified("unshift", "shift")
   end
 end

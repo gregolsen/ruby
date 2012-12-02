@@ -1,6 +1,7 @@
 require "test/unit"
 require "fileutils"
 require "tmpdir"
+require_relative "envutil"
 
 class TestFileExhaustive < Test::Unit::TestCase
   DRIVE = Dir.pwd[%r'\A(?:[a-z]:|//[^/]+/[^/]+)'i]
@@ -14,6 +15,7 @@ class TestFileExhaustive < Test::Unit::TestCase
 
   def setup
     @dir = Dir.mktmpdir("rubytest-file")
+    @rootdir = "#{DRIVE}/"
     File.chown(-1, Process.gid, @dir)
     @file = make_tmp_filename("file")
     @zerofile = make_tmp_filename("zerofile")
@@ -106,6 +108,28 @@ class TestFileExhaustive < Test::Unit::TestCase
     assert_kind_of(File::Stat, File.open(@file) {|f| f.lstat})
   end
 
+  def test_stat_drive_root
+    assert_nothing_raised { File.stat(DRIVE + "/") }
+    assert_nothing_raised { File.stat(DRIVE + "/.") }
+    assert_nothing_raised { File.stat(DRIVE + "/..") }
+    assert_raise(Errno::ENOENT) { File.stat(DRIVE + "/...") }
+    # want to test the root of empty drive, but there is no method to test it...
+  end if DRIVE
+
+  def test_stat_dotted_prefix
+    Dir.mktmpdir do |dir|
+      prefix = File.join(dir, "...a")
+      Dir.mkdir(prefix)
+      assert_file.exist?(prefix)
+
+      assert_nothing_raised { File.stat(prefix) }
+
+      Dir.chdir(dir) do
+        assert_nothing_raised { File.stat(File.basename(prefix)) }
+      end
+    end
+  end if /mswin|mingw|cygwin/ =~ RUBY_PLATFORM
+
   def test_directory_p
     assert(File.directory?(@dir))
     assert(!(File.directory?(@dir+"/...")))
@@ -146,9 +170,9 @@ class TestFileExhaustive < Test::Unit::TestCase
   end
 
   def test_exist_p
-    assert(File.exist?(@dir))
-    assert(File.exist?(@file))
-    assert(!(File.exist?(@nofile)))
+    assert_file.exist?(@dir)
+    assert_file.exist?(@file)
+    assert_file.not_exist?(@nofile)
   end
 
   def test_readable_p
@@ -375,8 +399,8 @@ class TestFileExhaustive < Test::Unit::TestCase
 
   def test_rename
     assert_equal(0, File.rename(@file, @nofile))
-    assert(!(File.exist?(@file)))
-    assert(File.exist?(@nofile))
+    assert_file.not_exist?(@file)
+    assert_file.exist?(@nofile)
     assert_equal(0, File.rename(@nofile, @file))
     assert_raise(Errno::ENOENT) { File.rename(@nofile, @file) }
   end
@@ -409,6 +433,9 @@ class TestFileExhaustive < Test::Unit::TestCase
     else
       assert_equal("/foo", File.expand_path('/foo'))
     end
+  end
+
+  def test_expand_path_encoding
     drive = (DRIVE ? 'C:' : '')
     if Encoding.find("filesystem") == Encoding::CP1251
       a = "#{drive}/\u3042\u3044\u3046\u3048\u304a".encode("cp932")
@@ -425,13 +452,43 @@ class TestFileExhaustive < Test::Unit::TestCase
       assert_equal(expected.force_encoding(cp), File.expand_path(a.dup.force_encoding(cp)), cp)
     end
 
+    path = "\u3042\u3044\u3046\u3048\u304a".encode("EUC-JP")
+    assert_equal("#{Dir.pwd}/#{path}".encode("CP932"), File.expand_path(path).encode("CP932"))
+
+    path = "\u3042\u3044\u3046\u3048\u304a".encode("CP51932")
+    assert_equal("#{Dir.pwd}/#{path}", File.expand_path(path))
+
+    assert_incompatible_encoding {|d| File.expand_path(d)}
+  end
+
+  def test_expand_path_encoding_filesystem
+    home = ENV["HOME"]
+    ENV["HOME"] = "#{DRIVE}/UserHome"
+
+    path = "~".encode("US-ASCII")
+    dir = "C:/".encode("IBM437")
+    fs = Encoding.find("filesystem")
+
+    assert_equal fs, File.expand_path(path).encoding
+    assert_equal fs, File.expand_path(path, dir).encoding
+  ensure
+    ENV["HOME"] = home
+  end
+
+  def test_expand_path_home
     assert_kind_of(String, File.expand_path("~")) if ENV["HOME"]
     assert_raise(ArgumentError) { File.expand_path("~foo_bar_baz_unknown_user_wahaha") }
     assert_raise(ArgumentError) { File.expand_path("~foo_bar_baz_unknown_user_wahaha", "/") }
     begin
       bug3630 = '[ruby-core:31537]'
       home = ENV["HOME"]
+      home_drive = ENV["HOMEDRIVE"]
+      home_path = ENV["HOMEPATH"]
+      user_profile = ENV["USERPROFILE"]
       ENV["HOME"] = nil
+      ENV["HOMEDRIVE"] = nil
+      ENV["HOMEPATH"] = nil
+      ENV["USERPROFILE"] = nil
       assert_raise(ArgumentError) { File.expand_path("~") }
       ENV["HOME"] = "~"
       assert_raise(ArgumentError, bug3630) { File.expand_path("~") }
@@ -439,8 +496,197 @@ class TestFileExhaustive < Test::Unit::TestCase
       assert_raise(ArgumentError, bug3630) { File.expand_path("~") }
     ensure
       ENV["HOME"] = home
+      ENV["HOMEDRIVE"] = home_drive
+      ENV["HOMEPATH"] = home_path
+      ENV["USERPROFILE"] = user_profile
     end
-    assert_incompatible_encoding {|d| File.expand_path(d)}
+  end
+
+  def test_expand_path_remove_trailing_alternative_data
+    assert_equal File.join(@rootdir, "aaa"), File.expand_path("#{@rootdir}/aaa::$DATA")
+    assert_equal File.join(@rootdir, "aa:a"), File.expand_path("#{@rootdir}/aa:a:$DATA")
+    assert_equal File.join(@rootdir, "aaa:$DATA"), File.expand_path("#{@rootdir}/aaa:$DATA")
+  end if DRIVE
+
+  def test_expand_path_resolve_empty_string_current_directory
+    assert_equal(Dir.pwd, File.expand_path(""))
+  end
+
+  def test_expand_path_resolve_dot_current_directory
+    assert_equal(Dir.pwd, File.expand_path("."))
+  end
+
+  def test_expand_path_resolve_file_name_relative_current_directory
+    assert_equal(File.join(Dir.pwd, "foo"), File.expand_path("foo"))
+  end
+
+  def test_ignore_nil_dir_string
+    assert_equal(File.join(Dir.pwd, "foo"), File.expand_path("foo", nil))
+  end
+
+  def test_expand_path_resolve_file_name_and_dir_string_relative
+    assert_equal(File.join(Dir.pwd, "bar", "foo"),
+      File.expand_path("foo", "bar"))
+  end
+
+  def test_expand_path_cleanup_dots_file_name
+    bug = "[ruby-talk:18512]"
+
+    assert_equal(File.join(Dir.pwd, ".a"), File.expand_path(".a"), bug)
+    assert_equal(File.join(Dir.pwd, "..a"), File.expand_path("..a"), bug)
+
+    if DRIVE
+      # cleanup dots only on Windows
+      assert_equal(File.join(Dir.pwd, "a"), File.expand_path("a."), bug)
+      assert_equal(File.join(Dir.pwd, "a"), File.expand_path("a.."), bug)
+    else
+      assert_equal(File.join(Dir.pwd, "a."), File.expand_path("a."), bug)
+      assert_equal(File.join(Dir.pwd, "a.."), File.expand_path("a.."), bug)
+    end
+  end
+
+  def test_expand_path_converts_a_pathname_to_an_absolute_pathname_using_a_complete_path
+    assert_equal(@dir, File.expand_path("", "#{@dir}"))
+    assert_equal(File.join(@dir, "a"), File.expand_path("a", "#{@dir}"))
+    assert_equal(File.join(@dir, "a"), File.expand_path("../a", "#{@dir}/xxx"))
+    assert_equal(@rootdir, File.expand_path(".", "#{@rootdir}"))
+  end
+
+  def test_expand_path_ignores_supplied_dir_if_path_contains_a_drive_letter
+    assert_equal(@rootdir, File.expand_path(@rootdir, "D:/"))
+  end if DRIVE
+
+  def test_expand_path_removes_trailing_slashes_from_absolute_path
+    assert_equal(File.join(@rootdir, "foo"), File.expand_path("#{@rootdir}foo/"))
+    assert_equal(File.join(@rootdir, "foo.rb"), File.expand_path("#{@rootdir}foo.rb/"))
+  end
+
+  def test_expand_path_removes_trailing_spaces_from_absolute_path
+    assert_equal(File.join(@rootdir, "a"), File.expand_path("#{@rootdir}a "))
+  end if DRIVE
+
+  def test_expand_path_converts_a_pathname_which_starts_with_a_slash_using_dir_s_drive
+    assert_match(%r"\Az:/foo\z"i, File.expand_path('/foo', "z:/bar"))
+  end if DRIVE
+
+  def test_expand_path_converts_a_pathname_which_starts_with_a_slash_and_unc_pathname
+    assert_equal("//foo", File.expand_path('//foo', "//bar"))
+    assert_equal("//bar/foo", File.expand_path('/foo', "//bar"))
+    assert_equal("//foo", File.expand_path('//foo', "/bar"))
+  end if DRIVE
+
+  def test_expand_path_converts_a_dot_with_unc_dir
+    assert_equal("//", File.expand_path('.', "//"))
+  end
+
+  def test_expand_path_preserves_unc_path_root
+    assert_equal("//", File.expand_path("//"))
+    assert_equal("//", File.expand_path("//."))
+    assert_equal("//", File.expand_path("//.."))
+  end
+
+  def test_expand_path_converts_a_pathname_which_starts_with_a_slash_using_host_share
+    assert_match(%r"\A//host/share/foo\z"i, File.expand_path('/foo', "//host/share/bar"))
+  end if DRIVE
+
+  def test_expand_path_converts_a_pathname_which_starts_with_a_slash_using_a_current_drive
+    assert_match(%r"\A#{DRIVE}/foo\z"i, File.expand_path('/foo'))
+  end
+
+  def test_expand_path_returns_tainted_strings_or_not
+    assert_equal(true, File.expand_path('foo').tainted?)
+    assert_equal(true, File.expand_path('foo'.taint).tainted?)
+    assert_equal(true, File.expand_path('/foo'.taint).tainted?)
+    assert_equal(true, File.expand_path('foo', 'bar').tainted?)
+    assert_equal(true, File.expand_path('foo', '/bar'.taint).tainted?)
+    assert_equal(true, File.expand_path('foo'.taint, '/bar').tainted?)
+    assert_equal(true, File.expand_path('~').tainted?) if ENV["HOME"]
+
+    if DRIVE
+      assert_equal(true, File.expand_path('/foo').tainted?)
+      assert_equal(false, File.expand_path('//foo').tainted?)
+      assert_equal(true, File.expand_path('C:/foo'.taint).tainted?)
+      assert_equal(false, File.expand_path('C:/foo').tainted?)
+      assert_equal(true, File.expand_path('foo', '/bar').tainted?)
+      assert_equal(true, File.expand_path('foo', 'C:/bar'.taint).tainted?)
+      assert_equal(true, File.expand_path('foo'.taint, 'C:/bar').tainted?)
+      assert_equal(false, File.expand_path('foo', 'C:/bar').tainted?)
+      assert_equal(false, File.expand_path('C:/foo/../bar').tainted?)
+      assert_equal(false, File.expand_path('foo', '//bar').tainted?)
+    else
+      assert_equal(false, File.expand_path('/foo').tainted?)
+      assert_equal(false, File.expand_path('foo', '/bar').tainted?)
+    end
+  end
+
+  def test_expand_path_converts_a_pathname_to_an_absolute_pathname_using_home_as_base
+    old_home = ENV["HOME"]
+    home = ENV["HOME"] = "#{DRIVE}/UserHome"
+    assert_equal(home, File.expand_path("~"))
+    assert_equal(home, File.expand_path("~", "C:/FooBar"))
+    assert_equal(File.join(home, "a"), File.expand_path("~/a", "C:/FooBar"))
+  ensure
+    ENV["HOME"] = old_home
+  end
+
+  def test_expand_path_converts_a_pathname_to_an_absolute_pathname_using_unc_home
+    old_home = ENV["HOME"]
+    unc_home = ENV["HOME"] = "//UserHome"
+    assert_equal(unc_home, File.expand_path("~"))
+  ensure
+    ENV["HOME"] = old_home
+  end if DRIVE
+
+  def test_expand_path_does_not_modify_a_home_string_argument
+    old_home = ENV["HOME"]
+    home = ENV["HOME"] = "#{DRIVE}/UserHome"
+    str = "~/a"
+    assert_equal("#{home}/a", File.expand_path(str))
+    assert_equal("~/a", str)
+  ensure
+    ENV["HOME"] = old_home
+  end
+
+  def test_expand_path_raises_argument_error_for_any_supplied_username
+    bug = '[ruby-core:39597]'
+    assert_raise(ArgumentError, bug) { File.expand_path("~anything") }
+  end if DRIVE
+
+  def test_expand_path_raises_a_type_error_if_not_passed_a_string_type
+    assert_raise(TypeError) { File.expand_path(1) }
+    assert_raise(TypeError) { File.expand_path(nil) }
+    assert_raise(TypeError) { File.expand_path(true) }
+  end
+
+  def test_expand_path_expands_dot_dir
+    assert_equal("#{DRIVE}/dir", File.expand_path("#{DRIVE}/./dir"))
+  end
+
+  def test_expand_path_does_not_expand_wildcards
+    assert_equal("#{DRIVE}/*", File.expand_path("./*", "#{DRIVE}/"))
+    assert_equal("#{Dir.pwd}/*", File.expand_path("./*", Dir.pwd))
+    assert_equal("#{DRIVE}/?", File.expand_path("./?", "#{DRIVE}/"))
+    assert_equal("#{Dir.pwd}/?", File.expand_path("./?", Dir.pwd))
+  end if DRIVE
+
+  def test_expand_path_does_not_modify_the_string_argument
+    str = "./a/b/../c"
+    assert_equal("#{Dir.pwd}/a/c", File.expand_path(str, Dir.pwd))
+    assert_equal("./a/b/../c", str)
+  end
+
+  def test_expand_path_returns_a_string_when_passed_a_string_subclass
+    sub = Class.new(String)
+    str = sub.new "./a/b/../c"
+    path = File.expand_path(str, Dir.pwd)
+    assert_equal("#{Dir.pwd}/a/c", path)
+    assert_instance_of(String, path)
+  end
+
+  def test_expand_path_accepts_objects_that_have_a_to_path_method
+    klass = Class.new { def to_path; "a/b/c"; end }
+    obj = klass.new
+    assert_equal("#{Dir.pwd}/a/b/c", File.expand_path(obj))
   end
 
   def test_basename
@@ -532,10 +778,14 @@ class TestFileExhaustive < Test::Unit::TestCase
     s = "foo" + File::SEPARATOR + "bar" + File::SEPARATOR + "baz"
     assert_equal(s, File.join("foo", "bar", "baz"))
     assert_equal(s, File.join(["foo", "bar", "baz"]))
+
     o = Object.new
     def o.to_path; "foo"; end
     assert_equal(s, File.join(o, "bar", "baz"))
     assert_equal(s, File.join("foo" + File::SEPARATOR, "bar", File::SEPARATOR + "baz"))
+  end
+
+  def test_join_alt_separator
     if File::ALT_SEPARATOR == '\\'
       a = "\225\\"
       b = "foo"
@@ -545,23 +795,41 @@ class TestFileExhaustive < Test::Unit::TestCase
     end
   end
 
+  def test_join_ascii_incompatible
+    bug7168 = '[ruby-core:48012]'
+    names = %w"a b".map {|s| s.encode(Encoding::UTF_16LE)}
+    assert_raise(Encoding::CompatibilityError, bug7168) {File.join(*names)}
+    assert_raise(Encoding::CompatibilityError, bug7168) {File.join(names)}
+
+    a = Object.new
+    b = names[1]
+    names = [a, "b"]
+    a.singleton_class.class_eval do
+      define_method(:to_path) do
+        names[1] = b
+        "a"
+      end
+    end
+    assert_raise(Encoding::CompatibilityError, bug7168) {File.join(names)}
+  end
+
   def test_truncate
     assert_equal(0, File.truncate(@file, 1))
-    assert(File.exist?(@file))
+    assert_file.exist?(@file)
     assert_equal(1, File.size(@file))
     assert_equal(0, File.truncate(@file, 0))
-    assert(File.exist?(@file))
-    assert(File.zero?(@file))
+    assert_file.exist?(@file)
+    assert_file.zero?(@file)
     make_file("foo", @file)
     assert_raise(Errno::ENOENT) { File.truncate(@nofile, 0) }
 
     f = File.new(@file, "w")
     assert_equal(0, f.truncate(2))
-    assert(File.exist?(@file))
+    assert_file.exist?(@file)
     assert_equal(2, File.size(@file))
     assert_equal(0, f.truncate(0))
-    assert(File.exist?(@file))
-    assert(File.zero?(@file))
+    assert_file.exist?(@file)
+    assert_file.zero?(@file)
     f.close
     make_file("foo", @file)
 
@@ -812,6 +1080,13 @@ class TestFileExhaustive < Test::Unit::TestCase
     assert_equal(3, File::Stat.new(@file).size)
     assert_equal(0, File::Stat.new(@zerofile).size)
   end
+
+  def test_stat_special_file
+    # test for special files such as pagefile.sys on Windows
+    assert_nothing_raised do
+      Dir::glob("C:/*.sys") {|f| File::Stat.new(f) }
+    end
+  end if DRIVE
 
   def test_path_check
     assert_nothing_raised { ENV["PATH"] }

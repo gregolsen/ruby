@@ -537,8 +537,7 @@ make_seed_value(const void *ptr)
 {
     const long len = DEFAULT_SEED_LEN/SIZEOF_BDIGITS;
     BDIGIT *digits;
-    NEWOBJ(big, struct RBignum);
-    OBJSETUP(big, rb_cBignum, T_BIGNUM);
+    NEWOBJ_OF(big, struct RBignum, rb_cBignum, T_BIGNUM);
 
     RBIGNUM_SET_SIGN(big, 1);
     rb_big_resize((VALUE)big, len + 1);
@@ -943,6 +942,22 @@ rb_random_real(VALUE obj)
     return genrand_real(&rnd->mt);
 }
 
+unsigned long
+rb_random_ulong_limited(VALUE obj, unsigned long limit)
+{
+    rb_random_t *rnd = try_get_rnd(obj);
+    if (!rnd) {
+	VALUE lim = ULONG2NUM(limit);
+	VALUE v = rb_funcall2(obj, id_rand, 1, &lim);
+	unsigned long r = NUM2ULONG(v);
+	if (r > limit) {
+	    rb_raise(rb_eRangeError, "random number too big %ld", r);
+	}
+	return r;
+    }
+    return limited_rand(&rnd->mt, limit);
+}
+
 /*
  * call-seq: prng.bytes(size) -> a_string
  *
@@ -1122,8 +1137,7 @@ rand_range(struct MT* mt, VALUE range)
       case T_FLOAT: {
 	VALUE f = rb_check_to_float(beg);
 	if (!NIL_P(f)) {
-	    RFLOAT_VALUE(v) += RFLOAT_VALUE(f);
-	    return v;
+	    return DBL2NUM(RFLOAT_VALUE(v) + RFLOAT_VALUE(f));
 	}
       }
       default:
@@ -1312,7 +1326,28 @@ random_s_rand(int argc, VALUE *argv, VALUE obj)
     return rand_random(argc, argv, rand_start(&default_rand));
 }
 
+#define SIP_HASH_STREAMING 0
+#define sip_hash24 ruby_sip_hash24
+#if !defined _WIN32 && !defined BYTE_ORDER
+# ifdef WORDS_BIGENDIAN
+#   define BYTE_ORDER BIG_ENDIAN
+# else
+#   define BYTE_ORDER LITTLE_ENDIAN
+# endif
+# ifndef LITTLE_ENDIAN
+#   define LITTLE_ENDIAN 1234
+# endif
+# ifndef BIG_ENDIAN
+#   define BIG_ENDIAN    4321
+# endif
+#endif
+#include "siphash.c"
+
 static st_index_t hashseed;
+static union {
+    uint8_t key[16];
+    uint32_t u32[(16 * sizeof(uint8_t) - 1) / sizeof(uint32_t)];
+} sipseed;
 
 static VALUE
 init_randomseed(struct MT *mt, unsigned int initial[DEFAULT_SEED_CNT])
@@ -1332,6 +1367,7 @@ Init_RandomSeed(void)
     unsigned int initial[DEFAULT_SEED_CNT];
     struct MT *mt = &r->mt;
     VALUE seed = init_randomseed(mt, initial);
+    int i;
 
     hashseed = genrand_int32(mt);
 #if SIZEOF_ST_INDEX_T*CHAR_BIT > 4*8
@@ -1347,6 +1383,9 @@ Init_RandomSeed(void)
     hashseed |= genrand_int32(mt);
 #endif
 
+    for (i = 0; i < numberof(sipseed.u32); ++i)
+	sipseed.u32[i] = genrand_int32(mt);
+
     rb_global_variable(&r->seed);
     r->seed = seed;
 }
@@ -1355,6 +1394,17 @@ st_index_t
 rb_hash_start(st_index_t h)
 {
     return st_hash_start(hashseed + h);
+}
+
+st_index_t
+rb_memhash(const void *ptr, long len)
+{
+    sip_uint64_t h = sip_hash24(sipseed.key, ptr, len);
+#ifdef HAVE_UINT64_T
+    return (st_index_t)h;
+#else
+    return (st_index_t)(h.u32[0] ^ h.u32[1]);
+#endif
 }
 
 static void

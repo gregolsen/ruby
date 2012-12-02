@@ -27,7 +27,7 @@
 static void
 control_frame_dump(rb_thread_t *th, rb_control_frame_t *cfp)
 {
-    ptrdiff_t pc = -1, bp = -1;
+    ptrdiff_t pc = -1;
     ptrdiff_t ep = cfp->ep - th->stack;
     char ep_in_heap = ' ';
     char posbuf[MAX_POSBUF+1];
@@ -43,9 +43,6 @@ control_frame_dump(rb_thread_t *th, rb_control_frame_t *cfp)
     if (ep < 0 || (size_t)ep > th->stack_size) {
 	ep = (ptrdiff_t)cfp->ep;
 	ep_in_heap = 'p';
-    }
-    if (cfp->bp) {
-	bp = cfp->bp - th->stack;
     }
 
     switch (VM_FRAME_TYPE(cfp)) {
@@ -119,7 +116,7 @@ control_frame_dump(rb_thread_t *th, rb_control_frame_t *cfp)
     else {
 	fprintf(stderr, "p:%04"PRIdPTRDIFF" ", pc);
     }
-    fprintf(stderr, "s:%04"PRIdPTRDIFF" b:%04"PRIdPTRDIFF" ", (cfp->sp - th->stack), bp);
+    fprintf(stderr, "s:%04"PRIdPTRDIFF" ", cfp->sp - th->stack);
     fprintf(stderr, ep_in_heap == ' ' ? "e:%06"PRIdPTRDIFF" " : "e:%06"PRIxPTRDIFF" ", ep % 10000);
     fprintf(stderr, "%-6s", magic);
     if (line) {
@@ -141,7 +138,7 @@ void
 rb_vmdebug_stack_dump_raw(rb_thread_t *th, rb_control_frame_t *cfp)
 {
 #if 0
-    VALUE *sp = cfp->sp, *bp = cfp->bp, *ep = cfp->ep;
+    VALUE *sp = cfp->sp, *ep = cfp->ep;
     VALUE *p, *st, *t;
 
     fprintf(stderr, "-- stack frame ------------\n");
@@ -155,8 +152,6 @@ rb_vmdebug_stack_dump_raw(rb_thread_t *th, rb_control_frame_t *cfp)
 
 	if (p == ep)
 	    fprintf(stderr, " <- ep");
-	if (p == bp)
-	    fprintf(stderr, " <- bp");	/* should not be */
 
 	fprintf(stderr, "\n");
     }
@@ -227,6 +222,20 @@ rb_vmdebug_stack_dump_th(VALUE thval)
 }
 
 #if VMDEBUG > 2
+
+/* copy from vm.c */
+static VALUE *
+vm_base_ptr(rb_control_frame_t *cfp)
+{
+    rb_control_frame_t *prev_cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
+    VALUE *bp = prev_cfp->sp + cfp->iseq->local_size + 1;
+
+    if (cfp->iseq->type == ISEQ_TYPE_METHOD) {
+	bp += 1;
+    }
+    return bp;
+}
+
 static void
 vm_stack_dump_each(rb_thread_t *th, rb_control_frame_t *cfp)
 {
@@ -242,7 +251,7 @@ vm_stack_dump_each(rb_thread_t *th, rb_control_frame_t *cfp)
 
     if (iseq == 0) {
 	if (RUBYVM_CFUNC_FRAME_P(cfp)) {
-	    name = rb_id2name(cfp->me->original_id);
+	    name = rb_id2name(cfp->me->called_id);
 	}
 	else {
 	    name = "?";
@@ -271,7 +280,6 @@ vm_stack_dump_each(rb_thread_t *th, rb_control_frame_t *cfp)
 
 	VALUE *ptr = ep - local_size;
 
-	vm_stack_dump_each(th, cfp + 1);
 	control_frame_dump(th, cfp);
 
 	for (i = 0; i < argc; i++) {
@@ -285,7 +293,7 @@ vm_stack_dump_each(rb_thread_t *th, rb_control_frame_t *cfp)
 		   (void *)ptr++);
 	}
 
-	ptr = cfp->bp;
+	ptr = vm_base_ptr(cfp);
 	for (; ptr < sp; ptr++, i++) {
 	    if (*ptr == Qundef) {
 		rstr = rb_str_new2("undef");
@@ -297,7 +305,7 @@ vm_stack_dump_each(rb_thread_t *th, rb_control_frame_t *cfp)
 		    (ptr - th->stack));
 	}
     }
-    else if (VM_FRAME_TYPE_FINISH_P(VM_FRAME_TYPE(cfp))) {
+    else if (VM_FRAME_TYPE_FINISH_P(cfp)) {
 	if ((th)->stack + (th)->stack_size > (VALUE *)(cfp + 1)) {
 	    vm_stack_dump_each(th, cfp + 1);
 	}
@@ -345,7 +353,7 @@ rb_vmdebug_debug_print_pre(rb_thread_t *th, rb_control_frame_t *cfp)
 {
     rb_iseq_t *iseq = cfp->iseq;
 
-    if (iseq != 0 && !VM_FRAME_TYPE_FINISH_P(cfp)) {
+    if (iseq != 0) {
 	VALUE *seq = iseq->iseq;
 	ptrdiff_t pc = cfp->pc - iseq->iseq_encoded;
 	int i;
@@ -386,6 +394,7 @@ rb_vmdebug_debug_print_post(rb_thread_t *th, rb_control_frame_t *cfp
 #if VMDEBUG > 2
     /* stack_dump_thobj(th); */
     vm_stack_dump_each(th, th->cfp);
+
 #if OPT_STACK_CACHING
     {
 	VALUE rstr;
@@ -399,145 +408,6 @@ rb_vmdebug_debug_print_post(rb_thread_t *th, rb_control_frame_t *cfp
 	("--------------------------------------------------------------\n");
 #endif
 }
-
-#ifdef COLLECT_USAGE_ANALYSIS
-/* uh = {
- *   insn(Fixnum) => ihash(Hash)
- * }
- * ihash = {
- *   -1(Fixnum) => count,      # insn usage
- *    0(Fixnum) => ophash,     # operand usage
- * }
- * ophash = {
- *   val(interned string) => count(Fixnum)
- * }
- */
-void
-vm_analysis_insn(int insn)
-{
-    ID usage_hash;
-    ID bigram_hash;
-    static int prev_insn = -1;
-
-    VALUE uh;
-    VALUE ihash;
-    VALUE cv;
-
-    CONST_ID(usage_hash, "USAGE_ANALYSIS_INSN");
-    CONST_ID(bigram_hash, "USAGE_ANALYSIS_INSN_BIGRAM");
-    uh = rb_const_get(rb_cRubyVM, usage_hash);
-    if ((ihash = rb_hash_aref(uh, INT2FIX(insn))) == Qnil) {
-	ihash = rb_hash_new();
-	rb_hash_aset(uh, INT2FIX(insn), ihash);
-    }
-    if ((cv = rb_hash_aref(ihash, INT2FIX(-1))) == Qnil) {
-	cv = INT2FIX(0);
-    }
-    rb_hash_aset(ihash, INT2FIX(-1), INT2FIX(FIX2INT(cv) + 1));
-
-    /* calc bigram */
-    if (prev_insn != -1) {
-	VALUE bi;
-	VALUE ary[2];
-	VALUE cv;
-
-	ary[0] = INT2FIX(prev_insn);
-	ary[1] = INT2FIX(insn);
-	bi = rb_ary_new4(2, &ary[0]);
-
-	uh = rb_const_get(rb_cRubyVM, bigram_hash);
-	if ((cv = rb_hash_aref(uh, bi)) == Qnil) {
-	    cv = INT2FIX(0);
-	}
-	rb_hash_aset(uh, bi, INT2FIX(FIX2INT(cv) + 1));
-    }
-    prev_insn = insn;
-}
-
-/* from disasm.c */
-extern VALUE insn_operand_intern(int insn, int op_no, VALUE op,
-				 int len, int pos, VALUE child);
-
-void
-vm_analysis_operand(int insn, int n, VALUE op)
-{
-    ID usage_hash;
-
-    VALUE uh;
-    VALUE ihash;
-    VALUE ophash;
-    VALUE valstr;
-    VALUE cv;
-
-    CONST_ID(usage_hash, "USAGE_ANALYSIS_INSN");
-
-    uh = rb_const_get(rb_cRubyVM, usage_hash);
-    if ((ihash = rb_hash_aref(uh, INT2FIX(insn))) == Qnil) {
-	ihash = rb_hash_new();
-	rb_hash_aset(uh, INT2FIX(insn), ihash);
-    }
-    if ((ophash = rb_hash_aref(ihash, INT2FIX(n))) == Qnil) {
-	ophash = rb_hash_new();
-	rb_hash_aset(ihash, INT2FIX(n), ophash);
-    }
-    /* intern */
-    valstr = insn_operand_intern(insn, n, op, 0, 0, 0);
-
-    /* set count */
-    if ((cv = rb_hash_aref(ophash, valstr)) == Qnil) {
-	cv = INT2FIX(0);
-    }
-    rb_hash_aset(ophash, valstr, INT2FIX(FIX2INT(cv) + 1));
-}
-
-void
-vm_analysis_register(int reg, int isset)
-{
-    ID usage_hash;
-    VALUE uh;
-    VALUE rhash;
-    VALUE valstr;
-    static const char regstrs[][5] = {
-	"pc",			/* 0 */
-	"sp",			/* 1 */
-	"ep",                   /* 2 */
-	"cfp",			/* 3 */
-	"self",			/* 4 */
-	"iseq",			/* 5 */
-    };
-    static const char getsetstr[][4] = {
-	"get",
-	"set",
-    };
-    static VALUE syms[sizeof(regstrs) / sizeof(regstrs[0])][2];
-
-    VALUE cv;
-
-    CONST_ID(usage_hash, "USAGE_ANALYSIS_REGS");
-    if (syms[0] == 0) {
-	char buff[0x10];
-	int i;
-
-	for (i = 0; i < sizeof(regstrs) / sizeof(regstrs[0]); i++) {
-	    int j;
-	    for (j = 0; j < 2; j++) {
-		snfprintf(stderr, buff, 0x10, "%d %s %-4s", i, getsetstr[j],
-			 regstrs[i]);
-		syms[i][j] = ID2SYM(rb_intern(buff));
-	    }
-	}
-    }
-    valstr = syms[reg][isset];
-
-    uh = rb_const_get(rb_cRubyVM, usage_hash);
-    if ((cv = rb_hash_aref(uh, valstr)) == Qnil) {
-	cv = INT2FIX(0);
-    }
-    rb_hash_aset(uh, valstr, INT2FIX(FIX2INT(cv) + 1));
-}
-
-
-#endif
 
 VALUE
 rb_vmdebug_thread_dump_state(VALUE self)
@@ -763,10 +633,13 @@ rb_vm_bugreport(void)
     {
 #if defined __APPLE__
 	fprintf(stderr, "\n");
-	fprintf(stderr, "   See Crash Report log file under "
-		"~/Library/Logs/CrashReporter or\n");
-	fprintf(stderr, "   /Library/Logs/CrashReporter, for "
-		"the more detail of.\n");
+	fprintf(stderr,
+		"   See Crash Report log file under the one of following:\n"
+		"     * ~/Library/Logs/CrashReporter\n"
+		"     * /Library/Logs/CrashReporter\n"
+		"     * ~/Library/Logs/DiagnosticReports\n"
+		"     * /Library/Logs/DiagnosticReports\n"
+		"   the more detail of.\n");
 #elif HAVE_BACKTRACE
 #define MAX_NATIVE_TRACE 1024
 	static void *trace[MAX_NATIVE_TRACE];

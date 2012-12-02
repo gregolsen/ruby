@@ -240,9 +240,57 @@ class TestModule < Test::Unit::TestCase
     assert(!Math.const_defined?("IP"))
   end
 
+  def test_bad_constants
+    [
+      "#<Class:0x7b8b718b>",
+      ":Object",
+      "",
+      ":",
+    ].each do |name|
+      e = assert_raises(NameError) {
+        Object.const_get name
+      }
+      assert_equal("wrong constant name %s" % name, e.message)
+    end
+  end
+
+  def test_leading_colons
+    assert_equal Object, AClass.const_get('::Object')
+  end
+
   def test_const_get
     assert_equal(Math::PI, Math.const_get("PI"))
     assert_equal(Math::PI, Math.const_get(:PI))
+  end
+
+  def test_nested_get
+    assert_equal Other, Object.const_get([self.class, Other].join('::'))
+    assert_equal User::USER, self.class.const_get([User, 'USER'].join('::'))
+  end
+
+  def test_nested_get_symbol
+    const = [self.class, Other].join('::').to_sym
+
+    assert_equal Other, Object.const_get(const)
+    assert_equal User::USER, self.class.const_get([User, 'USER'].join('::'))
+  end
+
+  def test_nested_get_const_missing
+    classes = []
+    klass = Class.new {
+      define_singleton_method(:const_missing) { |name|
+	classes << name
+	klass
+      }
+    }
+    klass.const_get("Foo::Bar::Baz")
+    assert_equal [:Foo, :Bar, :Baz], classes
+  end
+
+  def test_nested_bad_class
+    assert_raises(TypeError) do
+      self.class.const_get([User, 'USER', 'Foo'].join('::'))
+    end
   end
 
   def test_const_set
@@ -675,7 +723,7 @@ class TestModule < Test::Unit::TestCase
     end
 
     %w(object_id __send__ initialize).each do |n|
-      assert_in_out_err([], <<-INPUT, [], /warning: undefining `#{n}' may cause serious problems$/)
+      assert_in_out_err([], <<-INPUT, [], %r"warning: undefining `#{n}' may cause serious problems$")
         $VERBOSE = false
         Class.new.instance_eval { undef_method(:#{n}) }
       INPUT
@@ -1356,6 +1404,15 @@ class TestModule < Test::Unit::TestCase
     assert_equal([:m0, :m1, :m2, :c1], c1.new.x)
     assert_equal([c2, m0, m1, m2, c0], c2.ancestors[0, 5], bug6662)
     assert_equal([:c2, :m0, :m1, :m2, :c0], c2.new.x)
+
+    m3 = labeled_module("m3") {include m1; prepend m1}
+    assert_equal([m3, m0, m1], m3.ancestors)
+    m3 = labeled_module("m3") {prepend m1; include m1}
+    assert_equal([m0, m1, m3], m3.ancestors)
+    m3 = labeled_module("m3") {prepend m1; prepend m1}
+    assert_equal([m0, m1, m3], m3.ancestors)
+    m3 = labeled_module("m3") {include m1; include m1}
+    assert_equal([m3, m0, m1], m3.ancestors)
   end
 
   def labeled_module(name, &block)
@@ -1388,5 +1445,72 @@ class TestModule < Test::Unit::TestCase
     assert_equal([:@@bar, :@@foo], m2.class_variables)
     assert_equal([:@@bar, :@@foo], m2.class_variables(true))
     assert_equal([:@@bar], m2.class_variables(false))
+  end
+
+  Bug6891 = '[ruby-core:47241]'
+
+  def test_extend_module_with_protected_method
+    list = []
+
+    x = Class.new {
+      @list = list
+
+      extend Module.new {
+        protected
+
+        def inherited(klass)
+          @list << "protected"
+          super(klass)
+        end
+      }
+
+      extend Module.new {
+        def inherited(klass)
+          @list << "public"
+          super(klass)
+        end
+      }
+    }
+
+    assert_nothing_raised(NoMethodError, Bug6891) {Class.new(x)}
+    assert_equal(['public', 'protected'], list)
+  end
+
+  def test_extend_module_with_protected_bmethod
+    list = []
+
+    x = Class.new {
+      extend Module.new {
+        protected
+
+        define_method(:inherited) do |klass|
+          list << "protected"
+          super(klass)
+        end
+      }
+
+      extend Module.new {
+        define_method(:inherited) do |klass|
+          list << "public"
+          super(klass)
+        end
+      }
+    }
+
+    assert_nothing_raised(NoMethodError, Bug6891) {Class.new(x)}
+    assert_equal(['public', 'protected'], list)
+  end
+
+  def test_invalid_attr
+    %w[
+      foo?
+      @foo
+      @@foo
+      $foo
+    ].each do |name|
+      assert_raises(NameError) do
+        Module.new { attr_accessor name.to_sym }
+      end
+    end
   end
 end

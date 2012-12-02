@@ -49,8 +49,7 @@ static ID id_attached;
 static VALUE
 class_alloc(VALUE flags, VALUE klass)
 {
-    NEWOBJ(obj, struct RClass);
-    OBJSETUP(obj, klass, flags);
+    NEWOBJ_OF(obj, struct RClass, klass, flags);
     obj->ptr = ALLOC(rb_classext_t);
     RCLASS_IV_TBL(obj) = 0;
     RCLASS_CONST_TBL(obj) = 0;
@@ -58,6 +57,8 @@ class_alloc(VALUE flags, VALUE klass)
     RCLASS_SUPER(obj) = 0;
     RCLASS_ORIGIN(obj) = (VALUE)obj;
     RCLASS_IV_INDEX_TBL(obj) = 0;
+    RCLASS_REFINED_CLASS(obj) = Qnil;
+    RCLASS_EXT(obj)->allocator = 0;
     return (VALUE)obj;
 }
 
@@ -168,6 +169,7 @@ rb_mod_init_copy(VALUE clone, VALUE orig)
 	rb_singleton_class_attached(RBASIC(clone)->klass, (VALUE)clone);
     }
     RCLASS_SUPER(clone) = RCLASS_SUPER(orig);
+    RCLASS_EXT(clone)->allocator = RCLASS_EXT(orig)->allocator;
     if (RCLASS_IV_TBL(orig)) {
 	st_data_t id;
 
@@ -235,6 +237,7 @@ rb_singleton_class_clone(VALUE obj)
 	}
 
 	RCLASS_SUPER(clone) = RCLASS_SUPER(klass);
+	RCLASS_EXT(clone)->allocator = RCLASS_EXT(klass)->allocator;
 	if (RCLASS_IV_TBL(klass)) {
 	    RCLASS_IV_TBL(clone) = st_copy(RCLASS_IV_TBL(klass));
 	}
@@ -620,8 +623,8 @@ rb_define_module_id_under(VALUE outer, ID id)
     return module;
 }
 
-static VALUE
-include_class_new(VALUE module, VALUE super)
+VALUE
+rb_include_class_new(VALUE module, VALUE super)
 {
     VALUE klass = class_alloc(T_ICLASS, rb_cClass);
 
@@ -636,7 +639,7 @@ include_class_new(VALUE module, VALUE super)
     }
     RCLASS_IV_TBL(klass) = RCLASS_IV_TBL(module);
     RCLASS_CONST_TBL(klass) = RCLASS_CONST_TBL(module);
-    RCLASS_M_TBL(klass) = RCLASS_M_TBL(module);
+    RCLASS_M_TBL(klass) = RCLASS_M_TBL(RCLASS_ORIGIN(module));
     RCLASS_SUPER(klass) = super;
     if (RB_TYPE_P(module, T_ICLASS)) {
 	RBASIC(klass)->klass = RBASIC(module)->klass;
@@ -703,7 +706,7 @@ include_modules_at(VALUE klass, VALUE c, VALUE module)
 		break;
 	    }
 	}
-	c = RCLASS_SUPER(c) = include_class_new(module, RCLASS_SUPER(c));
+	c = RCLASS_SUPER(c) = rb_include_class_new(module, RCLASS_SUPER(c));
 	if (RMODULE_M_TBL(module) && RMODULE_M_TBL(module)->num_entries)
 	    changed = 1;
       skip:
@@ -895,10 +898,6 @@ method_entry_i(st_data_t key, st_data_t value, st_data_t data)
     const rb_method_entry_t *me = (const rb_method_entry_t *)value;
     st_table *list = (st_table *)data;
     long type;
-
-    if ((ID)key == ID_ALLOCATOR) {
-	return ST_CONTINUE;
-    }
 
     if (!st_lookup(list, key, 0)) {
 	if (UNDEFINED_METHOD_ENTRY_P(me)) {
@@ -1285,6 +1284,20 @@ rb_undef_method(VALUE klass, const char *name)
     }\
 } while (0)
 
+static inline VALUE
+special_singleton_class_of(VALUE obj)
+{
+    SPECIAL_SINGLETON(Qnil, rb_cNilClass);
+    SPECIAL_SINGLETON(Qfalse, rb_cFalseClass);
+    SPECIAL_SINGLETON(Qtrue, rb_cTrueClass);
+    return Qnil;
+}
+
+VALUE
+rb_special_singleton_class(VALUE obj)
+{
+    return special_singleton_class_of(obj);
+}
 
 /*!
  * \internal
@@ -1300,14 +1313,20 @@ singleton_class_of(VALUE obj)
 {
     VALUE klass;
 
-    if (FIXNUM_P(obj) || SYMBOL_P(obj)) {
+    if (FIXNUM_P(obj) || FLONUM_P(obj) || SYMBOL_P(obj)) {
 	rb_raise(rb_eTypeError, "can't define singleton");
     }
-    if (rb_special_const_p(obj)) {
-	SPECIAL_SINGLETON(Qnil, rb_cNilClass);
-	SPECIAL_SINGLETON(Qfalse, rb_cFalseClass);
-	SPECIAL_SINGLETON(Qtrue, rb_cTrueClass);
-	rb_bug("unknown immediate %p", (void *)obj);
+    if (SPECIAL_CONST_P(obj)) {
+	klass = special_singleton_class_of(obj);
+	if (NIL_P(klass))
+	    rb_bug("unknown immediate %p", (void *)obj);
+	return klass;
+    }
+    else {
+	enum ruby_value_type type = BUILTIN_TYPE(obj);
+	if (type == T_FLOAT || type == T_BIGNUM) {
+           rb_raise(rb_eTypeError, "can't define singleton");
+	}
     }
 
     if (FL_TEST(RBASIC(obj)->klass, FL_SINGLETON) &&
@@ -1444,7 +1463,7 @@ rb_define_attr(VALUE klass, const char *name, int read, int write)
 int
 rb_obj_basic_to_s_p(VALUE obj)
 {
-    const rb_method_entry_t *me = rb_method_entry(CLASS_OF(obj), rb_intern("to_s"));
+    const rb_method_entry_t *me = rb_method_entry(CLASS_OF(obj), rb_intern("to_s"), 0);
     if (me && me->def && me->def->type == VM_METHOD_TYPE_CFUNC &&
 	me->def->body.cfunc.func == rb_any_to_s)
 	return 1;

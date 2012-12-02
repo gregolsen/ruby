@@ -136,6 +136,55 @@ int setregid(rb_gid_t rgid, rb_gid_t egid);
 #define preserving_errno(stmts) \
 	do {int saved_errno = errno; stmts; errno = saved_errno;} while (0)
 
+static void check_uid_switch(void);
+static void check_gid_switch(void);
+
+#if 1
+#define p_uid_from_name p_uid_from_name
+#define p_gid_from_name p_gid_from_name
+#endif
+
+#if defined(HAVE_PWD_H)
+# ifdef HAVE_GETPWNAM_R
+#   define PREPARE_GETPWNAM \
+    long getpw_buf_len = sysconf(_SC_GETPW_R_SIZE_MAX); \
+    char *getpw_buf = ALLOCA_N(char, (getpw_buf_len < 0 ? (getpw_buf_len = 4096) : getpw_buf_len));
+#   define OBJ2UID(id) obj2uid((id), getpw_buf, getpw_buf_len)
+static rb_uid_t obj2uid(VALUE id, char *getpw_buf, size_t getpw_buf_len);
+# else
+#   define PREPARE_GETPWNAM	/* do nothing */
+#   define OBJ2UID(id) obj2uid((id))
+static rb_uid_t obj2uid(VALUE id);
+# endif
+#else
+# define PREPARE_GETPWNAM	/* do nothing */
+# define OBJ2UID(id) NUM2UIDT(id)
+# ifdef p_uid_from_name
+#   undef p_uid_from_name
+#   define p_uid_from_name rb_f_notimplement
+# endif
+#endif
+
+#if defined(HAVE_GRP_H)
+# ifdef HAVE_GETGRNAM_R
+#   define PREPARE_GETGRNAM \
+    long getgr_buf_len = sysconf(_SC_GETGR_R_SIZE_MAX); \
+    char *getgr_buf = ALLOCA_N(char, (getgr_buf_len < 0 ? (getgr_buf_len = 4096) : getgr_buf_len));
+#   define OBJ2GID(id) obj2gid((id), getgr_buf, getgr_buf_len)
+static rb_gid_t obj2gid(VALUE id, char *getgr_buf, size_t getgr_buf_len);
+# else
+#   define PREPARE_GETGRNAM	/* do nothing */
+#   define OBJ2GID(id) obj2gid((id))
+static rb_gid_t obj2gid(VALUE id);
+# endif
+#else
+# define PREPARE_GETGRNAM	/* do nothing */
+# define OBJ2GID(id) NUM2GIDT(id)
+# ifdef p_gid_from_name
+#   undef p_gid_from_name
+#   define p_gid_from_name rb_f_notimplement
+# endif
+#endif
 
 /*
  *  call-seq:
@@ -226,7 +275,7 @@ rb_last_status_set(int status, rb_pid_t pid)
     rb_iv_set(th->last_status, "pid", PIDT2NUM(pid));
 }
 
-static void
+void
 rb_last_status_clear(void)
 {
     GET_THREAD()->last_status = Qnil;
@@ -1017,6 +1066,8 @@ before_exec_non_async_signal_safe(void)
 	 * On Mac OS X 10.5.x (Leopard) or earlier, exec() may return ENOTSUPP
 	 * if the process have multiple threads. Therefore we have to kill
 	 * internal threads temporary. [ruby-core:10583]
+	 * This is also true on Haiku. It returns Errno::EPERM against exec()
+	 * in multiple threads.
 	 */
 	rb_thread_stop_timer_thread(0);
     }
@@ -1662,6 +1713,38 @@ rb_execarg_addopt(VALUE execarg_obj, VALUE key, VALUE val)
             key = INT2FIX(2);
             goto redirect;
         }
+	else if (id == rb_intern("uid")) {
+#ifdef HAVE_SETUID
+	    if (eargp->uid_given) {
+		rb_raise(rb_eArgError, "uid option specified twice");
+	    }
+	    check_uid_switch();
+	    {
+		PREPARE_GETPWNAM;
+		eargp->uid = OBJ2UID(val);
+		eargp->uid_given = 1;
+	    }
+#else
+	    rb_raise(rb_eNotImpError,
+		     "uid option is unimplemented on this machine");
+#endif
+	}
+	else if (id == rb_intern("gid")) {
+#ifdef HAVE_SETGID
+	    if (eargp->gid_given) {
+		rb_raise(rb_eArgError, "gid option specified twice");
+	    }
+	    check_gid_switch();
+	    {
+		PREPARE_GETGRNAM;
+		eargp->gid = OBJ2GID(val);
+		eargp->gid_given = 1;
+	    }
+#else
+	    rb_raise(rb_eNotImpError,
+		     "gid option is unimplemented on this machine");
+#endif
+	}
         else {
 	    return ST_STOP;
         }
@@ -1953,9 +2036,9 @@ rb_exec_fillarg(VALUE prog, int argc, VALUE *argv, VALUE env, VALUE opthash, VAL
 	static const char posix_sh_cmds[][9] = {
 	    "!",		/* reserved */
 	    ".",		/* special built-in */
+	    ":",		/* special built-in */
 	    "break",		/* special built-in */
 	    "case",		/* reserved */
-	    "colon",		/* special built-in */
 	    "continue",		/* special built-in */
 	    "do",		/* reserved */
 	    "done",		/* reserved */
@@ -2307,7 +2390,7 @@ rb_f_exec(int argc, VALUE *argv)
     rb_execarg_fixup(execarg_obj);
     fail_str = eargp->use_shell ? eargp->invoke.sh.shell_script : eargp->invoke.cmd.command_name;
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__HAIKU__)
     rb_exec_without_timer_thread(eargp, errmsg, sizeof(errmsg));
 #else
     rb_exec_async_signal_safe(eargp, errmsg, sizeof(errmsg));
@@ -2355,16 +2438,28 @@ redirect_dup(int oldfd)
     ttyprintf("dup(%d) => %d\n", oldfd, ret);
     return ret;
 }
+#else
+#define redirect_dup(oldfd) dup(oldfd)
+#endif
 
+#if defined(DEBUG_REDIRECT) || defined(_WIN32)
 static int
 redirect_dup2(int oldfd, int newfd)
 {
     int ret;
     ret = dup2(oldfd, newfd);
+    if (newfd >= 0 && newfd <= 2)
+	SetStdHandle(newfd == 0 ? STD_INPUT_HANDLE : newfd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE, (HANDLE)rb_w32_get_osfhandle(newfd));
+#if defined(DEBUG_REDIRECT)
     ttyprintf("dup2(%d, %d)\n", oldfd, newfd);
+#endif
     return ret;
 }
+#else
+#define redirect_dup2(oldfd, newfd) dup2((oldfd), (newfd))
+#endif
 
+#if defined(DEBUG_REDIRECT)
 static int
 redirect_close(int fd)
 {
@@ -2384,8 +2479,6 @@ redirect_open(const char *pathname, int flags, mode_t perm)
 }
 
 #else
-#define redirect_dup(oldfd) dup(oldfd)
-#define redirect_dup2(oldfd, newfd) dup2((oldfd), (newfd))
 #define redirect_close(fd) close(fd)
 #define redirect_open(pathname, flags, perm) open((pathname), (flags), (perm))
 #endif
@@ -2726,7 +2819,7 @@ run_exec_rlimit(VALUE ary, struct rb_execarg *sargp, char *errmsg, size_t errmsg
                                        RLIM2NUM(rlim.rlim_max)));
             if (sargp->rlimit_limits == Qfalse)
                 newary = sargp->rlimit_limits = hide_obj(rb_ary_new());
-            else 
+            else
                 newary = sargp->rlimit_limits;
             rb_ary_push(newary, tmp);
         }
@@ -2872,6 +2965,23 @@ rb_execarg_run_options(const struct rb_execarg *eargp, struct rb_execarg *sargp,
             return -1;
         }
     }
+
+#ifdef HAVE_SETGID
+    if (eargp->gid_given) {
+	if (setgid(eargp->gid) < 0) {
+	    ERRMSG("setgid");
+	    return -1;
+	}
+    }
+#endif
+#ifdef HAVE_SETUID
+    if (eargp->uid_given) {
+	if (setuid(eargp->uid) < 0) {
+	    ERRMSG("setuid");
+	    return -1;
+	}
+    }
+#endif
 
     if (sargp) {
         VALUE ary = sargp->fd_dup2;
@@ -3656,12 +3766,16 @@ rb_f_system(int argc, VALUE *argv)
 #ifdef SIGCHLD
     RETSIGTYPE (*chfunc)(int);
 
+    rb_last_status_clear();
     chfunc = signal(SIGCHLD, SIG_DFL);
 #endif
     pid = rb_spawn_internal(argc, argv, NULL, 0);
 #if defined(HAVE_FORK) || defined(HAVE_SPAWNV)
     if (pid > 0) {
-	rb_syswait(pid);
+        int ret, status;
+        ret = rb_waitpid(pid, &status, 0);
+        if (ret == (rb_pid_t)-1)
+            rb_sys_fail("Another thread waited the process started by system().");
     }
 #endif
 #ifdef SIGCHLD
@@ -4102,6 +4216,40 @@ proc_setpgid(VALUE obj, VALUE pid, VALUE pgrp)
 }
 #else
 #define proc_setpgid rb_f_notimplement
+#endif
+
+
+#ifdef HAVE_GETSID
+/*
+ *  call-seq:
+ *     Process.getsid()      -> integer
+ *     Process.getsid(pid)   -> integer
+ *
+ *  Returns the session ID for for the given process id. If not give,
+ *  return current process sid. Not available on all platforms.
+ *
+ *     Process.getsid()                #=> 27422
+ *     Process.getsid(0)               #=> 27422
+ *     Process.getsid(Process.pid())   #=> 27422
+ */
+static VALUE
+proc_getsid(int argc, VALUE *argv)
+{
+    rb_pid_t sid;
+    VALUE pid;
+
+    rb_secure(2);
+    rb_scan_args(argc, argv, "01", &pid);
+
+    if (NIL_P(pid))
+	pid = INT2NUM(0);
+
+    sid = getsid(NUM2PIDT(pid));
+    if (sid < 0) rb_sys_fail(0);
+    return PIDT2NUM(sid);
+}
+#else
+#define proc_getsid rb_f_notimplement
 #endif
 
 
@@ -4575,22 +4723,7 @@ check_gid_switch(void)
  *  <code>Process::UID</code>, and <code>Process::GID</code> modules.
  */
 
-#if 1
-#define p_uid_from_name p_uid_from_name
-#define p_gid_from_name p_gid_from_name
-#endif
-
 #if defined(HAVE_PWD_H)
-# ifdef HAVE_GETPWNAM_R
-#   define PREPARE_GETPWNAM \
-    long getpw_buf_len = sysconf(_SC_GETPW_R_SIZE_MAX); \
-    char *getpw_buf = ALLOCA_N(char, (getpw_buf_len < 0 ? (getpw_buf_len = 4096) : getpw_buf_len));
-#   define OBJ2UID(id) obj2uid((id), getpw_buf, getpw_buf_len)
-# else
-#   define PREPARE_GETPWNAM	/* do nothing */
-#   define OBJ2UID(id) obj2uid((id))
-# endif
-
 static rb_uid_t
 obj2uid(VALUE id
 # ifdef HAVE_GETPWNAM_R
@@ -4636,26 +4769,9 @@ p_uid_from_name(VALUE self, VALUE id)
     return UIDT2NUM(OBJ2UID(id));
 }
 # endif
-#else
-# define PREPARE_GETPWNAM	/* do nothing */
-# define OBJ2UID(id) NUM2UIDT(id)
-# ifdef p_uid_from_name
-#   undef p_uid_from_name
-#   define p_uid_from_name rb_f_notimplement
-# endif
 #endif
 
 #if defined(HAVE_GRP_H)
-# ifdef HAVE_GETGRNAM_R
-#   define PREPARE_GETGRNAM \
-    long getgr_buf_len = sysconf(_SC_GETGR_R_SIZE_MAX); \
-    char *getgr_buf = ALLOCA_N(char, (getgr_buf_len < 0 ? (getgr_buf_len = 4096) : getgr_buf_len));
-#   define OBJ2GID(id) obj2gid((id), getgr_buf, getgr_buf_len)
-# else
-#   define PREPARE_GETGRNAM	/* do nothing */
-#   define OBJ2GID(id) obj2gid((id))
-# endif
-
 static rb_gid_t
 obj2gid(VALUE id
 # ifdef HAVE_GETGRNAM_R
@@ -4700,13 +4816,6 @@ p_gid_from_name(VALUE self, VALUE id)
     PREPARE_GETGRNAM;
     return GIDT2NUM(OBJ2GID(id));
 }
-# endif
-#else
-# define PREPARE_GETGRNAM	/* do nothing */
-# define OBJ2GID(id) NUM2GIDT(id)
-# ifdef p_gid_from_name
-#   undef p_gid_from_name
-#   define p_gid_from_name rb_f_notimplement
 # endif
 #endif
 
@@ -6534,6 +6643,7 @@ Init_process(void)
     rb_define_module_function(rb_mProcess, "getpgid", proc_getpgid, 1);
     rb_define_module_function(rb_mProcess, "setpgid", proc_setpgid, 2);
 
+    rb_define_module_function(rb_mProcess, "getsid", proc_getsid, -1);
     rb_define_module_function(rb_mProcess, "setsid", proc_setsid, 0);
 
     rb_define_module_function(rb_mProcess, "getpriority", proc_getpriority, 2);

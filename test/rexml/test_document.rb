@@ -106,4 +106,214 @@ EOX
     doc = REXML::Document.new('<?xml version="1.0" standalone=  "no" ?>')
     assert_equal('no', doc.stand_alone?, bug2539)
   end
+
+  class WriteTest < Test::Unit::TestCase
+    def setup
+      @document = REXML::Document.new(<<-EOX)
+<?xml version="1.0" encoding="UTF-8"?>
+<message>Hello world!</message>
+EOX
+    end
+
+    class ArgumentsTest < self
+      def test_output
+        output = ""
+        @document.write(output)
+        assert_equal(<<-EOX, output)
+<?xml version='1.0' encoding='UTF-8'?>
+<message>Hello world!</message>
+EOX
+      end
+
+      def test_indent
+        output = ""
+        indent = 2
+        @document.write(output, indent)
+        assert_equal(<<-EOX.chomp, output)
+<?xml version='1.0' encoding='UTF-8'?>
+<message>
+  Hello world!
+</message>
+EOX
+      end
+
+      def test_transitive
+        output = ""
+        indent = 2
+        transitive = true
+        @document.write(output, indent, transitive)
+        assert_equal(<<-EOX, output)
+<?xml version='1.0' encoding='UTF-8'?>
+<message
+>Hello world!</message
+>
+EOX
+      end
+
+      def test_ie_hack
+        output = ""
+        indent = -1
+        transitive = false
+        ie_hack = true
+        document = REXML::Document.new("<empty/>")
+        document.write(output, indent, transitive, ie_hack)
+        assert_equal("<empty />", output)
+      end
+
+      def test_encoding
+        output = ""
+        indent = -1
+        transitive = false
+        ie_hack = false
+        encoding = "Windows-31J"
+
+        @document.xml_decl.encoding = "Shift_JIS"
+        japanese_text = "こんにちは"
+        @document.root.text = japanese_text
+        @document.write(output, indent, transitive, ie_hack, encoding)
+        assert_equal(<<-EOX.encode(encoding), output)
+<?xml version='1.0' encoding='SHIFT_JIS'?>
+<message>#{japanese_text}</message>
+EOX
+      end
+    end
+
+    class OptionsTest < self
+      def test_output
+        output = ""
+        @document.write(:output => output)
+        assert_equal(<<-EOX, output)
+<?xml version='1.0' encoding='UTF-8'?>
+<message>Hello world!</message>
+EOX
+      end
+
+      def test_indent
+        output = ""
+        @document.write(:output => output, :indent => 2)
+        assert_equal(<<-EOX.chomp, output)
+<?xml version='1.0' encoding='UTF-8'?>
+<message>
+  Hello world!
+</message>
+EOX
+      end
+
+      def test_transitive
+        output = ""
+        @document.write(:output => output, :indent => 2, :transitive => true)
+        assert_equal(<<-EOX, output)
+<?xml version='1.0' encoding='UTF-8'?>
+<message
+>Hello world!</message
+>
+EOX
+      end
+
+      def test_ie_hack
+        output = ""
+        document = REXML::Document.new("<empty/>")
+        document.write(:output => output, :ie_hack => true)
+        assert_equal("<empty />", output)
+      end
+
+      def test_encoding
+        output = ""
+        encoding = "Windows-31J"
+        @document.xml_decl.encoding = "Shift_JIS"
+        japanese_text = "こんにちは"
+        @document.root.text = japanese_text
+        @document.write(:output => output, :encoding => encoding)
+        assert_equal(<<-EOX.encode(encoding), output)
+<?xml version='1.0' encoding='SHIFT_JIS'?>
+<message>#{japanese_text}</message>
+EOX
+      end
+    end
+  end
+
+  class BomTest < self
+    class HaveEncodingTest < self
+      def test_utf_8
+        xml = <<-EOX.force_encoding("ASCII-8BIT")
+<?xml version="1.0" encoding="UTF-8"?>
+<message>Hello world!</message>
+EOX
+        bom = "\ufeff".force_encoding("ASCII-8BIT")
+        document = REXML::Document.new(bom + xml)
+        assert_equal("UTF-8", document.encoding)
+      end
+
+      def test_utf_16le
+        xml = <<-EOX.encode("UTF-16LE").force_encoding("ASCII-8BIT")
+<?xml version="1.0" encoding="UTF-16"?>
+<message>Hello world!</message>
+EOX
+        bom = "\ufeff".encode("UTF-16LE").force_encoding("ASCII-8BIT")
+        document = REXML::Document.new(bom + xml)
+        assert_equal("UTF-16", document.encoding)
+      end
+
+      def test_utf_16be
+        xml = <<-EOX.encode("UTF-16BE").force_encoding("ASCII-8BIT")
+<?xml version="1.0" encoding="UTF-16"?>
+<message>Hello world!</message>
+EOX
+        bom = "\ufeff".encode("UTF-16BE").force_encoding("ASCII-8BIT")
+        document = REXML::Document.new(bom + xml)
+        assert_equal("UTF-16", document.encoding)
+      end
+    end
+
+    class NoEncodingTest < self
+      def test_utf_8
+        xml = <<-EOX.force_encoding("ASCII-8BIT")
+<?xml version="1.0"?>
+<message>Hello world!</message>
+EOX
+        bom = "\ufeff".force_encoding("ASCII-8BIT")
+        document = REXML::Document.new(bom + xml)
+        assert_equal("UTF-8", document.encoding)
+      end
+
+      def test_utf_16le
+        xml = <<-EOX.encode("UTF-16LE").force_encoding("ASCII-8BIT")
+<?xml version="1.0"?>
+<message>Hello world!</message>
+EOX
+        bom = "\ufeff".encode("UTF-16LE").force_encoding("ASCII-8BIT")
+        document = REXML::Document.new(bom + xml)
+        assert_equal("UTF-16", document.encoding)
+      end
+
+      def test_utf_16be
+        xml = <<-EOX.encode("UTF-16BE").force_encoding("ASCII-8BIT")
+<?xml version="1.0"?>
+<message>Hello world!</message>
+EOX
+        bom = "\ufeff".encode("UTF-16BE").force_encoding("ASCII-8BIT")
+        document = REXML::Document.new(bom + xml)
+        assert_equal("UTF-16", document.encoding)
+      end
+    end
+
+    class WriteTest < self
+      def test_utf_16
+        xml = <<-EOX.encode("UTF-16LE").force_encoding("ASCII-8BIT")
+<?xml version="1.0"?>
+<message>Hello world!</message>
+EOX
+        bom = "\ufeff".encode("UTF-16LE").force_encoding("ASCII-8BIT")
+        document = REXML::Document.new(bom + xml)
+
+        actual_xml = ""
+        document.write(actual_xml)
+        expected_xml = <<-EOX.encode("UTF-16BE")
+\ufeff<?xml version='1.0' encoding='UTF-16'?>
+<message>Hello world!</message>
+EOX
+        assert_equal(expected_xml, actual_xml)
+      end
+    end
+  end
 end

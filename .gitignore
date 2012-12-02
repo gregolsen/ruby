@@ -2,6 +2,7 @@
 *.a
 *.bak
 *.dSYM
+*.dmyh
 *.dylib
 *.inc
 *.log
@@ -71,6 +72,7 @@ y.tab.c
 /ppack
 /prelude.c
 /preview
+/probes.h
 /rbconfig.rb
 /rename2.h
 /repack
@@ -121,3 +123,4 @@ y.tab.c
 
 # /win32/
 /win32/*.ico
+/win32/.time

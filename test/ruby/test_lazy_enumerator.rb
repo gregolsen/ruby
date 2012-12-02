@@ -307,8 +307,8 @@ class TestLazyEnumerator < Test::Unit::TestCase
     assert_equal("#<Enumerator::Lazy: 1..10:cycle(2)>",
                  Enumerator::Lazy.new(1..10, :cycle, 2).inspect)
     assert_equal("#<Enumerator::Lazy: 1..10>", (1..10).lazy.inspect)
-    assert_equal('#<Enumerator::Lazy: #<Enumerator: "foo":chars>>',
-                 "foo".chars.lazy.inspect)
+    assert_equal('#<Enumerator::Lazy: #<Enumerator: "foo":each_char>>',
+                 "foo".each_char.lazy.inspect)
     assert_equal("#<Enumerator::Lazy: #<Enumerator::Lazy: 1..10>:map>",
                  (1..10).lazy.map {}.inspect)
     assert_equal("#<Enumerator::Lazy: #<Enumerator::Lazy: 1..10>:take(0)>",
@@ -327,5 +327,38 @@ class TestLazyEnumerator < Test::Unit::TestCase
     assert_equal(<<EOS.chomp, l.inspect)
 #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: #<Enumerator::Lazy: 1..10>:map>:collect>:flat_map>:collect_concat>:select>:find_all>:reject>:grep(1)>:zip("a".."c")>:take(10)>:take_while>:drop(3)>:drop_while>:cycle(3)>
 EOS
+  end
+
+  def test_size
+    lazy = [1, 2, 3].lazy
+    assert_equal 3, lazy.size
+    assert_equal 42, Enumerator.new(42){}.lazy.size
+    %i[map collect flat_map collect_concat].each do |m|
+      assert_equal 3, lazy.send(m){}.size
+    end
+    assert_equal 3, lazy.zip([4]).size
+    %i[select find_all reject take_while drop_while].each do |m|
+      assert_equal nil, lazy.send(m){}.size
+    end
+    assert_equal nil, lazy.grep(//).size
+
+    assert_equal 2, lazy.take(2).size
+    assert_equal 3, lazy.take(4).size
+    assert_equal 4, loop.lazy.take(4).size
+    assert_equal nil, lazy.select{}.take(4).size
+
+    assert_equal 1, lazy.drop(2).size
+    assert_equal 0, lazy.drop(4).size
+    assert_equal Float::INFINITY, loop.lazy.drop(4).size
+    assert_equal nil, lazy.select{}.drop(4).size
+
+    assert_equal 0, lazy.cycle(0).size
+    assert_equal 6, lazy.cycle(2).size
+    assert_equal 3 << 80, 4.times.inject(lazy){|enum| enum.cycle(1 << 20)}.size
+    assert_equal Float::INFINITY, lazy.cycle.size
+    assert_equal Float::INFINITY, loop.lazy.cycle(4).size
+    assert_equal Float::INFINITY, loop.lazy.cycle.size
+    assert_equal nil, lazy.select{}.cycle(4).size
+    assert_equal nil, lazy.select{}.cycle.size
   end
 end

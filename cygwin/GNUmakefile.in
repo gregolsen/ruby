@@ -1,5 +1,4 @@
 include Makefile
--include uncommon.mk
 
 ENABLE_SHARED=@ENABLE_SHARED@
 DLLWRAP = @DLLWRAP@ --target=@target_os@ --driver-name="$(CC)"
@@ -30,6 +29,9 @@ else
 endif
 
 WPROGRAM = $(RUBYW_INSTALL_NAME)$(EXEEXT)
+
+-include uncommon.mk
+
 SOLIBS := $(DLL_BASE_NAME).res.@OBJEXT@ $(SOLIBS)
 EXTOBJS += $(if $(filter-out $(RUBYW_INSTALL_NAME),$(@:$(EXEEXT)=)),$(RUBY_INSTALL_NAME),$(@:$(EXEEXT)=)).res.$(OBJEXT)
 RCFILES = $(RUBY_INSTALL_NAME).rc $(RUBYW_INSTALL_NAME).rc $(DLL_BASE_NAME).rc

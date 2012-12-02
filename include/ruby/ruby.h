@@ -73,13 +73,26 @@ extern "C" {
 #pragma GCC visibility push(default)
 #endif
 
-#if defined(HAVE_ALLOCA_H)
-#include <alloca.h>
+/* Make alloca work the best possible way.  */
+#ifdef __GNUC__
+# ifndef atarist
+#  ifndef alloca
+#   define alloca __builtin_alloca
+#  endif
+# endif	/* atarist */
 #else
+# ifdef HAVE_ALLOCA_H
+#  include <alloca.h>
+# else
 #  ifdef _AIX
 #pragma alloca
-#  endif
-#endif
+#  else
+#   ifndef alloca		/* predefined by HP cc +Olibcalls */
+void *alloca();
+#   endif
+#  endif /* AIX */
+# endif	/* HAVE_ALLOCA_H */
+#endif /* __GNUC__ */
 
 #if defined HAVE_UINTPTR_T && 0
 typedef uintptr_t VALUE;
@@ -350,11 +363,59 @@ rb_long2int_inline(long n)
 #define ID2SYM(x) (((VALUE)(x)<<RUBY_SPECIAL_SHIFT)|SYMBOL_FLAG)
 #define SYM2ID(x) RSHIFT((unsigned long)(x),RUBY_SPECIAL_SHIFT)
 
+#ifndef USE_FLONUM
+#if SIZEOF_VALUE >= SIZEOF_DOUBLE
+#define USE_FLONUM 1
+#else
+#define USE_FLONUM 0
+#endif
+#endif
+
+#if USE_FLONUM
+#define FLONUM_P(x) ((((int)(SIGNED_VALUE)(x))&FLONUM_MASK) == FLONUM_FLAG)
+#else
+#define FLONUM_P(x) 0
+#endif
+
 /* Module#methods, #singleton_methods and so on return Symbols */
 #define USE_SYMBOL_AS_METHOD_NAME 1
 
+/*
+!USE_FLONUM
+-------------------------
+...xxxx xxx1 Fixnum
+...0000 1110 Symbol
+...0000 0000 Qfalse
+...0000 0010 Qtrue
+...0000 0100 Qnil
+...0000 0110 Qundef
+
+USE_FLONUM
+-------------------------
+...xxxx xxx1 Fixnum
+...xxxx xx10 Flonum
+...0000 1100 Symbol
+...0000 0000 Qfalse  0x00 =  0
+...0000 1000  Qnil   0x08 =  8
+...0001 0100 Qtrue   0x14 = 20
+...0011 0100 Qundef  0x34 = 52
+ */
+
 /* special constants - i.e. non-zero and non-fixnum constants */
 enum ruby_special_consts {
+#if USE_FLONUM
+    RUBY_Qfalse = 0x00,
+    RUBY_Qtrue  = 0x14,
+    RUBY_Qnil   = 0x08,
+    RUBY_Qundef = 0x34,
+
+    RUBY_IMMEDIATE_MASK = 0x07,
+    RUBY_FIXNUM_FLAG    = 0x01,
+    RUBY_FLONUM_MASK    = 0x03,
+    RUBY_FLONUM_FLAG    = 0x02,
+    RUBY_SYMBOL_FLAG    = 0x0c,
+    RUBY_SPECIAL_SHIFT  = 8
+#else
     RUBY_Qfalse = 0,
     RUBY_Qtrue  = 2,
     RUBY_Qnil   = 4,
@@ -362,8 +423,11 @@ enum ruby_special_consts {
 
     RUBY_IMMEDIATE_MASK = 0x03,
     RUBY_FIXNUM_FLAG    = 0x01,
+    RUBY_FLONUM_MASK    = 0x00,	/* any values ANDed with FLONUM_MASK cannot be FLONUM_FLAG */
+    RUBY_FLONUM_FLAG    = 0x02,
     RUBY_SYMBOL_FLAG    = 0x0e,
     RUBY_SPECIAL_SHIFT  = 8
+#endif
 };
 
 #define Qfalse ((VALUE)RUBY_Qfalse)
@@ -372,6 +436,10 @@ enum ruby_special_consts {
 #define Qundef ((VALUE)RUBY_Qundef)	/* undefined value for placeholder */
 #define IMMEDIATE_MASK RUBY_IMMEDIATE_MASK
 #define FIXNUM_FLAG RUBY_FIXNUM_FLAG
+#if USE_FLONUM
+#define FLONUM_MASK RUBY_FLONUM_MASK
+#define FLONUM_FLAG RUBY_FLONUM_FLAG
+#endif
 #define SYMBOL_FLAG RUBY_SYMBOL_FLAG
 
 #define RTEST(v) (((VALUE)(v) & ~Qnil) != 0)
@@ -514,7 +582,15 @@ rb_num2long_inline(VALUE x)
 	return (long)rb_num2long(x);
 }
 #define NUM2LONG(x) rb_num2long_inline(x)
-#define NUM2ULONG(x) rb_num2ulong(x)
+static inline unsigned long
+rb_num2ulong_inline(VALUE x)
+{
+    if (FIXNUM_P(x))
+	return (unsigned long)FIX2LONG(x);
+    else
+	return (unsigned long)rb_num2ulong(x);
+}
+#define NUM2ULONG(x) rb_num2ulong_inline(x)
 #if SIZEOF_INT < SIZEOF_LONG
 long rb_num2int(VALUE);
 long rb_fix2int(VALUE);
@@ -581,7 +657,7 @@ rb_num2ll_inline(VALUE x)
 
 #if defined(HAVE_LONG_LONG) && SIZEOF_SIZE_T > SIZEOF_LONG
 # define NUM2SIZET(x) ((size_t)NUM2ULL(x))
-# define NUM2SSIZET(x) ((size_t)NUM2LL(x))
+# define NUM2SSIZET(x) ((ssize_t)NUM2LL(x))
 #else
 # define NUM2SIZET(x) NUM2ULONG(x)
 # define NUM2SSIZET(x) NUM2LONG(x)
@@ -594,7 +670,9 @@ VALUE rb_uint2big(VALUE);
 VALUE rb_int2big(SIGNED_VALUE);
 
 VALUE rb_newobj(void);
+VALUE rb_newobj_of(VALUE, VALUE);
 #define NEWOBJ(obj,type) type *(obj) = (type*)rb_newobj()
+#define NEWOBJ_OF(obj,type,klass,flags) type *(obj) = (type*)rb_newobj_of(klass, flags)
 #define OBJSETUP(obj,c,t) do {\
     RBASIC(obj)->flags = (t);\
     RBASIC(obj)->klass = (c);\
@@ -655,12 +733,94 @@ struct RClass {
 #define RMODULE_CONST_TBL(m) RCLASS_CONST_TBL(m)
 #define RMODULE_M_TBL(m) RCLASS_M_TBL(m)
 #define RMODULE_SUPER(m) RCLASS_SUPER(m)
+#define RMODULE_IS_OVERLAID FL_USER2
+#define RMODULE_IS_REFINEMENT FL_USER3
 
 struct RFloat {
     struct RBasic basic;
     double float_value;
 };
-#define RFLOAT_VALUE(v) (RFLOAT(v)->float_value)
+
+VALUE rb_float_new_in_heap(double);
+
+#if USE_FLONUM
+#define RUBY_BIT_ROTL(v, n) (((v) << (n)) | ((v) >> ((sizeof(v) * 8) - n)))
+#define RUBY_BIT_ROTR(v, n) (((v) >> (n)) | ((v) << ((sizeof(v) * 8) - n)))
+
+static inline double
+rb_float_value(VALUE v)
+{
+    if (FLONUM_P(v)) {
+	if (v != (VALUE)0x8000000000000002) { /* LIKELY */
+	    union {
+		double d;
+		VALUE v;
+	    } t;
+
+	    VALUE b63 = (v >> 63);
+	    /* e: xx1... -> 011... */
+	    /*    xx0... -> 100... */
+	    /*      ^b63           */
+	    t.v = RUBY_BIT_ROTR((2 - b63) | (v & ~0x03), 3);
+	    return t.d;
+	}
+	else {
+	    return 0.0;
+	}
+    }
+    else {
+	return ((struct RFloat *)v)->float_value;
+    }
+}
+
+static inline VALUE
+rb_float_new(double d)
+{
+    union {
+	double d;
+	VALUE v;
+    } t;
+    int bits;
+
+    t.d = d;
+    bits = (int)((VALUE)(t.v >> 60) & 0x7);
+    /* bits contains 3 bits of b62..b60. */
+    /* bits - 3 = */
+    /*   b011 -> b000 */
+    /*   b100 -> b001 */
+
+    if (t.v != 0x3000000000000000 /* 1.72723e-77 */ &&
+	!((bits-3) & ~0x01)) {
+	return (RUBY_BIT_ROTL(t.v, 3) & ~(VALUE)0x01) | 0x02;
+    }
+    else {
+	if (t.v == (VALUE)0) {
+	    /* +0.0 */
+	    return 0x8000000000000002;
+	}
+	else {
+	    /* out of range */
+	    return rb_float_new_in_heap(d);
+	}
+    }
+}
+
+#else /* USE_FLONUM */
+
+static inline double
+rb_float_value(VALUE v)
+{
+    return ((struct RFloat *)v)->float_value;
+}
+
+static inline VALUE
+rb_float_new(double d)
+{
+    return rb_float_new_in_heap(d);
+}
+#endif
+
+#define RFLOAT_VALUE(v) rb_float_value(v)
 #define DBL2NUM(dbl)  rb_float_new(dbl)
 
 #define ELTS_SHARED FL_USER2
@@ -981,9 +1141,13 @@ struct RBignum {
 #define OBJ_TAINT(x) FL_SET((x), FL_TAINT)
 #define OBJ_UNTRUSTED(x) (!!FL_TEST((x), FL_UNTRUSTED))
 #define OBJ_UNTRUST(x) FL_SET((x), FL_UNTRUSTED)
-#define OBJ_INFECT(x,s) do {if (FL_ABLE(x) && FL_ABLE(s)) RBASIC(x)->flags |= RBASIC(s)->flags & (FL_TAINT | FL_UNTRUSTED);} while (0)
+#define OBJ_INFECT(x,s) do { \
+  if (FL_ABLE(x) && FL_ABLE(s)) \
+    RBASIC(x)->flags |= RBASIC(s)->flags & \
+                        (FL_TAINT | FL_UNTRUSTED); \
+} while (0)
 
-#define OBJ_FROZEN(x) (!!FL_TEST((x), FL_FREEZE))
+#define OBJ_FROZEN(x) (!!(FL_ABLE(x)?(RBASIC(x)->flags&(FL_FREEZE)):(FIXNUM_P(x)||FLONUM_P(x))))
 #define OBJ_FREEZE(x) FL_SET((x), FL_FREEZE)
 
 #if SIZEOF_INT < SIZEOF_LONG
@@ -1167,6 +1331,8 @@ VALUE rb_funcall(VALUE, ID, int, ...);
 VALUE rb_funcall2(VALUE, ID, int, const VALUE*);
 VALUE rb_funcall3(VALUE, ID, int, const VALUE*);
 VALUE rb_funcall_passing_block(VALUE, ID, int, const VALUE*);
+VALUE rb_funcall_passing_block_with_refinements(VALUE, ID, int,
+						const VALUE*, VALUE);
 int rb_scan_args(int, const VALUE*, const char*, ...);
 VALUE rb_call_super(int, const VALUE*);
 
@@ -1323,6 +1489,7 @@ rb_class_of(VALUE obj)
 {
     if (IMMEDIATE_P(obj)) {
 	if (FIXNUM_P(obj)) return rb_cFixnum;
+	if (FLONUM_P(obj)) return rb_cFloat;
 	if (obj == Qtrue)  return rb_cTrueClass;
 	if (SYMBOL_P(obj)) return rb_cSymbol;
     }
@@ -1338,16 +1505,19 @@ rb_type(VALUE obj)
 {
     if (IMMEDIATE_P(obj)) {
 	if (FIXNUM_P(obj)) return T_FIXNUM;
-	if (obj == Qtrue) return T_TRUE;
+        if (FLONUM_P(obj)) return T_FLOAT;
+        if (obj == Qtrue)  return T_TRUE;
 	if (SYMBOL_P(obj)) return T_SYMBOL;
 	if (obj == Qundef) return T_UNDEF;
     }
     else if (!RTEST(obj)) {
-	if (obj == Qnil) return T_NIL;
+	if (obj == Qnil)   return T_NIL;
 	if (obj == Qfalse) return T_FALSE;
     }
     return BUILTIN_TYPE(obj);
 }
+
+#define RB_FLOAT_TYPE_P(obj) (FLONUM_P(obj) || (!SPECIAL_CONST_P(obj) && BUILTIN_TYPE(obj) == T_FLOAT))
 
 #define RB_TYPE_P(obj, type) ( \
 	((type) == T_FIXNUM) ? FIXNUM_P(obj) : \
@@ -1356,6 +1526,7 @@ rb_type(VALUE obj)
 	((type) == T_NIL) ? ((obj) == Qnil) : \
 	((type) == T_UNDEF) ? ((obj) == Qundef) : \
 	((type) == T_SYMBOL) ? SYMBOL_P(obj) : \
+        ((type) == T_FLOAT) ? RB_FLOAT_TYPE_P(obj) : \
 	(!SPECIAL_CONST_P(obj) && BUILTIN_TYPE(obj) == (type)))
 
 #ifdef __GNUC__
@@ -1399,24 +1570,15 @@ int ruby_native_thread_p(void);
 #define RUBY_EVENT_C_CALL    0x0020
 #define RUBY_EVENT_C_RETURN  0x0040
 #define RUBY_EVENT_RAISE     0x0080
-#define RUBY_EVENT_ALL       0xffff
-#define RUBY_EVENT_VM       0x10000
+#define RUBY_EVENT_ALL       0x00ff
 #define RUBY_EVENT_SWITCH   0x20000
 #define RUBY_EVENT_COVERAGE 0x40000
 
 typedef unsigned int rb_event_flag_t;
 typedef void (*rb_event_hook_func_t)(rb_event_flag_t evflag, VALUE data, VALUE self, ID mid, VALUE klass);
 
-typedef struct rb_event_hook_struct {
-    rb_event_flag_t flag;
-    rb_event_hook_func_t func;
-    VALUE data;
-    struct rb_event_hook_struct *next;
-} rb_event_hook_t;
-
 #define RB_EVENT_HOOKS_HAVE_CALLBACK_DATA 1
-void rb_add_event_hook(rb_event_hook_func_t func, rb_event_flag_t events,
-		       VALUE data);
+void rb_add_event_hook(rb_event_hook_func_t func, rb_event_flag_t events, VALUE data);
 int rb_remove_event_hook(rb_event_hook_func_t func);
 
 /* locale insensitive functions */

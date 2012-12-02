@@ -73,9 +73,11 @@ class BenchmarkDriver
     @repeat = opt[:repeat] || 1
     @repeat = 1 if @repeat < 1
     @pattern = opt[:pattern] || nil
+    @exclude = opt[:exclude] || nil
     @verbose = opt[:quiet] ? false : (opt[:verbose] || false)
     @output = opt[:output] ? open(opt[:output], 'w') : nil
     @loop_wl1 = @loop_wl2 = nil
+    @ruby_arg = opt[:ruby_arg] || nil
     @opt = opt
 
     # [[name, [[r-1-1, r-1-2, ...], [r-2-1, r-2-2, ...]]], ...]
@@ -90,8 +92,27 @@ class BenchmarkDriver
     end
   end
 
-  def average results
-    results.inject(:+) / results.length
+  def adjusted_results name, results
+    s = nil
+    results.each_with_index{|e, i|
+      r = e.min
+      case name
+      when /^vm1_/
+        if @loop_wl1
+          r -= @loop_wl1[i]
+          r = 0 if r < 0
+          s = '*'
+        end
+      when /^vm2_/
+        if @loop_wl2
+          r -= @loop_wl2[i]
+          r = 0 if r < 0
+          s = '*'
+        end
+      end
+      yield r
+    }
+    s
   end
 
   def show_results
@@ -103,7 +124,7 @@ class BenchmarkDriver
       message
       message PP.pp(@results, "", 79)
       message
-      message "Elapesed time: #{Time.now - @start_time} (sec)"
+      message "Elapsed time: #{Time.now - @start_time} (sec)"
     end
 
     output '-----------------------------------------------------------'
@@ -113,42 +134,41 @@ class BenchmarkDriver
       output "minimum results in each #{@repeat} measurements."
     end
 
-    difference = "\taverage difference" if @execs.length == 2
-    total_difference = 0
-
-    output "name\t#{@execs.map{|(_, v)| v}.join("\t")}#{difference}"
+    output "Execution time (sec)"
+    output "name\t#{@execs.map{|(_, v)| v}.join("\t")}"
     @results.each{|v, result|
       rets = []
-      s = nil
-      result.each_with_index{|e, i|
-        r = e.min
-        case v
-        when /^vm1_/
-          if @loop_wl1
-            r -= @loop_wl1[i]
-            s = '*'
-          end
-        when /^vm2_/
-          if @loop_wl2
-            r -= @loop_wl2[i]
-            s = '*'
-          end
-        end
+      s = adjusted_results(v, result){|r|
         rets << sprintf("%.3f", r)
       }
-
-      if difference
-        diff = average(result.last) - average(result.first)
-        total_difference += diff
-        rets << sprintf("%.3f", diff)
-      end
-
       output "#{v}#{s}\t#{rets.join("\t")}"
     }
 
-    if difference and @verbose
-      output '-----------------------------------------------------------'
-      output "average total difference is #{total_difference}"
+    if @execs.size > 1
+      output
+      output "Speedup ratio: compare with the result of `#{@execs[0][1]}' (greater is better)"
+      output "name\t#{@execs[1..-1].map{|(_, v)| v}.join("\t")}"
+      @results.each{|v, result|
+        rets = []
+        first_value = nil
+        s = adjusted_results(v, result){|r|
+          if first_value
+            if r == 0
+              rets << "Error"
+            else
+              rets << sprintf("%.3f", first_value/r)
+            end
+          else
+            first_value = r
+          end
+        }
+        output "#{v}#{s}\t#{rets.join("\t")}"
+      }
+    end
+
+    if @opt[:output]
+      output
+      output "Log file: #{@opt[:output]}"
     end
   end
 
@@ -156,6 +176,7 @@ class BenchmarkDriver
     flag = {}
     @files = Dir.glob(File.join(@dir, 'bm*.rb')).map{|file|
       next if @pattern && /#{@pattern}/ !~ File.basename(file)
+      next if @exclude && /#{@exclude}/ =~ File.basename(file)
       case file
       when /bm_(vm[12])_/, /bm_loop_(whileloop2?).rb/
         flag[$1] = true
@@ -217,7 +238,8 @@ class BenchmarkDriver
   end
 
   def measure executable, file
-    cmd = "#{executable} #{file}"
+    cmd = "#{executable} #{@ruby_arg} #{file}"
+
     m = Benchmark.measure{
       `#{cmd}`
     }
@@ -234,14 +256,14 @@ end
 if __FILE__ == $0
   opt = {
     :execs => ['ruby'],
-    :dir => './',
+    :dir => File.dirname(__FILE__),
     :repeat => 1,
     :output => "bmlog-#{Time.now.strftime('%Y%m%d-%H%M%S')}.#{$$}",
   }
 
   parser = OptionParser.new{|o|
     o.on('-e', '--executables [EXECS]',
-         "Specify benchmark one or more targets. (exec1; exec2; exec3, ...)"){|e|
+         "Specify benchmark one or more targets. (exec1;exec2;exec3;...)"){|e|
       opt[:execs] = e.split(/;/)
     }
     o.on('-d', '--directory [DIRECTORY]', "Benchmark suites directory"){|d|
@@ -250,11 +272,17 @@ if __FILE__ == $0
     o.on('-p', '--pattern [PATTERN]', "Benchmark name pattern"){|p|
       opt[:pattern] = p
     }
+    o.on('-x', '--exclude [PATTERN]', "Benchmark exclude pattern"){|e|
+      opt[:exclude] = e
+    }
     o.on('-r', '--repeat-count [NUM]', "Repeat count"){|n|
       opt[:repeat] = n.to_i
     }
     o.on('-o', '--output-file [FILE]', "Output file"){|f|
       opt[:output] = f
+    }
+    o.on('--ruby-arg [ARG]', "Optional argument for ruby"){|a|
+      opt[:ruby_arg] = a
     }
     o.on('-q', '--quiet', "Run without notify information except result table."){|q|
       opt[:quiet] = q

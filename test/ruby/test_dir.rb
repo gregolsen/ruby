@@ -164,11 +164,20 @@ class TestDir < Test::Unit::TestCase
 
     assert_equal([File.join(@root, "a")], Dir.glob(File.join(@root, 'a\\')))
     assert_equal((?a..?f).map {|f| File.join(@root, f) }.sort, Dir.glob(File.join(@root, '[abc/def]')).sort)
+  end
 
-    d = "\u{3042}\u{3044}".encode("utf-16le")
-    assert_raise(Encoding::CompatibilityError) {Dir.glob(d)}
-    m = Class.new {define_method(:to_path) {d}}
-    assert_raise(Encoding::CompatibilityError) {Dir.glob(m.new)}
+  def test_glob_recursive
+    bug6977 = '[ruby-core:47418]'
+    Dir.chdir(@root) do
+      FileUtils.mkdir_p("a/b/c/d/e/f")
+      assert_equal(["a/b/c/d/e/f"], Dir.glob("a/**/e/f"), bug6977)
+      assert_equal(["a/b/c/d/e/f"], Dir.glob("a/**/d/e/f"), bug6977)
+      assert_equal(["a/b/c/d/e/f"], Dir.glob("a/**/c/d/e/f"), bug6977)
+      assert_equal(["a/b/c/d/e/f"], Dir.glob("a/**/b/c/d/e/f"), bug6977)
+      assert_equal(["a/b/c/d/e/f"], Dir.glob("a/**/c/?/e/f"), bug6977)
+      assert_equal(["a/b/c/d/e/f"], Dir.glob("a/**/c/**/d/e/f"), bug6977)
+      assert_equal(["a/b/c/d/e/f"], Dir.glob("a/**/c/**/d/e/f"), bug6977)
+    end
   end
 
   def test_foreach

@@ -166,8 +166,7 @@ rb_big_resize(VALUE big, long len)
 static VALUE
 bignew_1(VALUE klass, long len, int sign)
 {
-    NEWOBJ(big, struct RBignum);
-    OBJSETUP(big, klass, T_BIGNUM);
+    NEWOBJ_OF(big, struct RBignum, klass, T_BIGNUM);
     RBIGNUM_SET_SIGN(big, sign?1:0);
     if (len <= RBIGNUM_EMBED_LEN_MAX) {
 	RBASIC(big)->flags |= RBIGNUM_EMBED_FLAG;
@@ -177,7 +176,7 @@ bignew_1(VALUE klass, long len, int sign)
 	RBIGNUM(big)->as.heap.digits = ALLOC_N(BDIGIT, len);
 	RBIGNUM(big)->as.heap.len = len;
     }
-
+    OBJ_FREEZE(big);
     return (VALUE)big;
 }
 
@@ -2502,7 +2501,7 @@ bigmul1_toom3(VALUE x, VALUE y)
     z2 = bigtrunc(bigadd(u2, u0, 0));
 
     /* z3 <- (z2 - z3) / 2 + 2 * z(inf) == (z2 - z3) / 2 + 2 * u4 */
-    z3 = bigadd(z2, z3, 0);
+    z3 = bigtrunc(bigadd(z2, z3, 0));
     bigrsh_bang(BDIGITS(z3), RBIGNUM_LEN(z3), 1);
     t = big_lshift(u4, 1); /* TODO: combining with next addition */
     z3 = bigtrunc(bigadd(z3, t, 1));
@@ -2812,7 +2811,7 @@ bigdivrem(VALUE x, VALUE y, volatile VALUE *divp, volatile VALUE *modp)
     if (modp) {			/* normalize remainder */
 	*modp = zz = rb_big_clone(z);
 	zds = BDIGITS(zz);
-	while (--ny && !zds[ny]); ++ny;
+	while (ny > 1 && !zds[ny-1]) --ny;
 	if (dd) {
 	    t2 = 0; i = ny;
 	    while(i--) {
@@ -3835,6 +3834,7 @@ Init_Bignum(void)
     rb_cBignum = rb_define_class("Bignum", rb_cInteger);
 
     rb_define_method(rb_cBignum, "to_s", rb_big_to_s, -1);
+    rb_define_alias(rb_cBignum, "inspect", "to_s");
     rb_define_method(rb_cBignum, "coerce", rb_big_coerce, 1);
     rb_define_method(rb_cBignum, "-@", rb_big_uminus, 0);
     rb_define_method(rb_cBignum, "+", rb_big_plus, 1);

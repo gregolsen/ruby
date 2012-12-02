@@ -432,8 +432,9 @@ rb_builtin_type_name(int t)
     return 0;
 }
 
-static const char *
-builtin_class_name(VALUE x)
+#define builtin_class_name rb_builtin_class_name
+const char *
+rb_builtin_class_name(VALUE x)
 {
     const char *etype;
 
@@ -635,7 +636,6 @@ exc_to_s(VALUE exc)
 
     if (NIL_P(mesg)) return rb_class_name(CLASS_OF(exc));
     r = rb_String(mesg);
-    OBJ_INFECT(r, exc);
     return r;
 }
 
@@ -996,11 +996,7 @@ name_err_to_s(VALUE exc)
 
     if (NIL_P(mesg)) return rb_class_name(CLASS_OF(exc));
     StringValue(str);
-    if (str != mesg) {
-	rb_iv_set(exc, "mesg", mesg = str);
-    }
-    OBJ_INFECT(mesg, exc);
-    return mesg;
+    return str;
 }
 
 /*
@@ -1131,7 +1127,6 @@ name_err_mesg_to_str(VALUE obj)
 	args[2] = d;
 	mesg = rb_f_sprintf(NAME_ERR_MESG_COUNT, args);
     }
-    OBJ_INFECT(mesg, obj);
     return mesg;
 }
 

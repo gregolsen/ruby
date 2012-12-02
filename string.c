@@ -14,7 +14,10 @@
 #include "ruby/ruby.h"
 #include "ruby/re.h"
 #include "ruby/encoding.h"
+#include "node.h"
+#include "eval_intern.h"
 #include "internal.h"
+#include "probes.h"
 #include <assert.h>
 
 #define BEG(no) (regs->beg[(no)])
@@ -370,14 +373,22 @@ rb_str_capacity(VALUE str)
 static inline VALUE
 str_alloc(VALUE klass)
 {
-    NEWOBJ(str, struct RString);
-    OBJSETUP(str, klass, T_STRING);
+    NEWOBJ_OF(str, struct RString, klass, T_STRING);
 
     str->as.heap.ptr = 0;
     str->as.heap.len = 0;
     str->as.heap.aux.capa = 0;
 
     return (VALUE)str;
+}
+
+static inline VALUE
+empty_str_alloc(VALUE klass)
+{
+    if(RUBY_DTRACE_STRING_CREATE_ENABLED()) {
+	RUBY_DTRACE_STRING_CREATE(0, rb_sourcefile(), rb_sourceline());
+    }
+    return str_alloc(klass);
 }
 
 static VALUE
@@ -387,6 +398,10 @@ str_new(VALUE klass, const char *ptr, long len)
 
     if (len < 0) {
 	rb_raise(rb_eArgError, "negative string size (or size too big)");
+    }
+
+    if(RUBY_DTRACE_STRING_CREATE_ENABLED()) {
+	RUBY_DTRACE_STRING_CREATE(len, rb_sourcefile(), rb_sourceline());
     }
 
     str = str_alloc(klass);
@@ -601,7 +616,7 @@ rb_str_export_to_enc(VALUE str, rb_encoding *enc)
 }
 
 static VALUE
-str_replace_shared(VALUE str2, VALUE str)
+str_replace_shared_without_enc(VALUE str2, VALUE str)
 {
     if (RSTRING_LEN(str) <= RSTRING_EMBED_LEN_MAX) {
 	STR_SET_EMBED(str2);
@@ -616,8 +631,14 @@ str_replace_shared(VALUE str2, VALUE str)
 	RSTRING(str2)->as.heap.aux.shared = str;
 	FL_SET(str2, ELTS_SHARED);
     }
-    rb_enc_cr_str_exact_copy(str2, str);
+    return str2;
+}
 
+static VALUE
+str_replace_shared(VALUE str2, VALUE str)
+{
+    str_replace_shared_without_enc(str2, str);
+    rb_enc_cr_str_exact_copy(str2, str);
     return str2;
 }
 
@@ -911,6 +932,10 @@ rb_str_dup(VALUE str)
 VALUE
 rb_str_resurrect(VALUE str)
 {
+    if(RUBY_DTRACE_STRING_CREATE_ENABLED()) {
+	RUBY_DTRACE_STRING_CREATE(
+            RSTRING_LEN(str), rb_sourcefile(), rb_sourceline());
+    }
     return str_replace(str_alloc(rb_cString), str);
 }
 
@@ -1632,6 +1657,7 @@ rb_str_subseq(VALUE str, long beg, long len)
     }
     else {
         str2 = rb_str_new5(str, RSTRING_PTR(str)+beg, len);
+	RB_GC_GUARD(str);
     }
 
     rb_enc_cr_str_copy_for_substr(str2, str);
@@ -1721,6 +1747,7 @@ rb_str_subpos(VALUE str, long beg, long *lenp)
     }
   end:
     *lenp = len;
+    RB_GC_GUARD(str);
     return p;
 }
 
@@ -1741,6 +1768,7 @@ rb_str_substr(VALUE str, long beg, long len)
 	str2 = rb_str_new5(str, p, len);
 	rb_enc_cr_str_copy_for_substr(str2, str);
 	OBJ_INFECT(str2, str);
+	RB_GC_GUARD(str);
     }
 
     return str2;
@@ -2158,7 +2186,7 @@ rb_str_concat(VALUE str1, VALUE str2)
 	    rb_raise(rb_eRangeError, "invalid codepoint 0x%X in %s", code, rb_enc_name(enc));
 	}
 	rb_str_resize(str1, pos+len);
-	strncpy(RSTRING_PTR(str1) + pos, buf, len);
+	memcpy(RSTRING_PTR(str1) + pos, buf, len);
 	if (cr == ENC_CODERANGE_7BIT && code > 127)
 	    cr = ENC_CODERANGE_VALID;
 	ENC_CODERANGE_SET(str1, cr);
@@ -2184,12 +2212,6 @@ rb_str_prepend(VALUE str, VALUE str2)
     StringValue(str);
     rb_str_update(str, 0L, 0L, str2);
     return str;
-}
-
-st_index_t
-rb_memhash(const void *ptr, long len)
-{
-    return st_hash(ptr, len, rb_hash_start((st_index_t)len));
 }
 
 st_index_t
@@ -2539,7 +2561,8 @@ rb_str_index_m(int argc, VALUE *argv, VALUE str)
 	}
     }
 
-    switch (TYPE(sub)) {
+    if (SPECIAL_CONST_P(sub)) goto generic;
+    switch (BUILTIN_TYPE(sub)) {
       case T_REGEXP:
 	if (pos > str_strlen(str, STR_ENC_GET(str)))
 	    return Qnil;
@@ -2550,6 +2573,7 @@ rb_str_index_m(int argc, VALUE *argv, VALUE str)
 	pos = rb_str_sublen(str, pos);
 	break;
 
+      generic:
       default: {
 	VALUE tmp;
 
@@ -2653,7 +2677,8 @@ rb_str_rindex_m(int argc, VALUE *argv, VALUE str)
 	pos = len;
     }
 
-    switch (TYPE(sub)) {
+    if (SPECIAL_CONST_P(sub)) goto generic;
+    switch (BUILTIN_TYPE(sub)) {
       case T_REGEXP:
 	/* enc = rb_get_check(str, sub); */
 	pos = str_offset(RSTRING_PTR(str), RSTRING_END(str), pos,
@@ -2666,6 +2691,7 @@ rb_str_rindex_m(int argc, VALUE *argv, VALUE str)
 	if (pos >= 0) return LONG2NUM(pos);
 	break;
 
+      generic:
       default: {
 	VALUE tmp;
 
@@ -2695,6 +2721,10 @@ rb_str_rindex_m(int argc, VALUE *argv, VALUE str)
  *  <i>obj.=~</i>, passing <i>str</i> as an argument. The default
  *  <code>=~</code> in <code>Object</code> returns <code>nil</code>.
  *
+ *  Note: <code>str =~ regexp</code> is not the same as
+ *  <code>regexp =~ str</code>. Strings captured from named capture groups
+ *  are assigned to local variables only in the second case.
+ *
  *     "cat o' 9 tails" =~ /\d/   #=> 7
  *     "cat o' 9 tails" =~ 9      #=> nil
  */
@@ -2702,13 +2732,15 @@ rb_str_rindex_m(int argc, VALUE *argv, VALUE str)
 static VALUE
 rb_str_match(VALUE x, VALUE y)
 {
-    switch (TYPE(y)) {
+    if (SPECIAL_CONST_P(y)) goto generic;
+    switch (BUILTIN_TYPE(y)) {
       case T_STRING:
 	rb_raise(rb_eTypeError, "type mismatch: String given");
 
       case T_REGEXP:
 	return rb_reg_match(y, x);
 
+      generic:
       default:
 	return rb_funcall(y, rb_intern("=~"), 1, x);
     }
@@ -3163,15 +3195,17 @@ rb_str_aref(VALUE str, VALUE indx)
 {
     long idx;
 
-    switch (TYPE(indx)) {
-      case T_FIXNUM:
+    if (FIXNUM_P(indx)) {
 	idx = FIX2LONG(indx);
 
       num_index:
 	str = rb_str_substr(str, idx, 1);
 	if (!NIL_P(str) && RSTRING_LEN(str) == 0) return Qnil;
 	return str;
+    }
 
+    if (SPECIAL_CONST_P(indx)) goto generic;
+    switch (BUILTIN_TYPE(indx)) {
       case T_REGEXP:
 	return rb_str_subpat(str, indx, INT2FIX(0));
 
@@ -3180,6 +3214,7 @@ rb_str_aref(VALUE str, VALUE indx)
 	    return rb_str_dup(indx);
 	return Qnil;
 
+      generic:
       default:
 	/* check if indx is Range */
 	{
@@ -3440,13 +3475,15 @@ rb_str_aset(VALUE str, VALUE indx, VALUE val)
 {
     long idx, beg;
 
-    switch (TYPE(indx)) {
-      case T_FIXNUM:
+    if (FIXNUM_P(indx)) {
 	idx = FIX2LONG(indx);
       num_index:
 	rb_str_splice(str, idx, 1, val);
 	return val;
+    }
 
+    if (SPECIAL_CONST_P(indx)) goto generic;
+    switch (TYPE(indx)) {
       case T_REGEXP:
 	rb_str_subpat_set(str, indx, INT2FIX(0), val);
 	return val;
@@ -3460,6 +3497,7 @@ rb_str_aset(VALUE str, VALUE indx, VALUE val)
 	rb_str_splice(str, beg, str_strlen(indx, 0), val);
 	return val;
 
+      generic:
       default:
 	/* check if indx is Range */
 	{
@@ -6060,45 +6098,8 @@ rb_str_split(VALUE str, const char *sep0)
 }
 
 
-/*
- *  call-seq:
- *     str.each_line(separator=$/) {|substr| block }   -> str
- *     str.each_line(separator=$/)                     -> an_enumerator
- *
- *     str.lines(separator=$/) {|substr| block }       -> str
- *     str.lines(separator=$/)                         -> an_enumerator
- *
- *  Splits <i>str</i> using the supplied parameter as the record separator
- *  (<code>$/</code> by default), passing each substring in turn to the supplied
- *  block. If a zero-length record separator is supplied, the string is split
- *  into paragraphs delimited by multiple successive newlines.
- *
- *  If no block is given, an enumerator is returned instead.
- *
- *     print "Example one\n"
- *     "hello\nworld".each_line {|s| p s}
- *     print "Example two\n"
- *     "hello\nworld".each_line('l') {|s| p s}
- *     print "Example three\n"
- *     "hello\n\n\nworld".each_line('') {|s| p s}
- *
- *  <em>produces:</em>
- *
- *     Example one
- *     "hello\n"
- *     "world"
- *     Example two
- *     "hel"
- *     "l"
- *     "o\nworl"
- *     "d"
- *     Example three
- *     "hello\n\n\n"
- *     "world"
- */
-
 static VALUE
-rb_str_each_line(int argc, VALUE *argv, VALUE str)
+rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
 {
     rb_encoding *enc;
     VALUE rs;
@@ -6108,6 +6109,7 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
     VALUE line;
     int n;
     VALUE orig = str;
+    VALUE ary;
 
     if (argc == 0) {
 	rs = rb_rs;
@@ -6115,10 +6117,34 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
     else {
 	rb_scan_args(argc, argv, "01", &rs);
     }
-    RETURN_ENUMERATOR(str, argc, argv);
+
+    if (rb_block_given_p()) {
+	if (wantarray) {
+#if 0 /* next major */
+	    rb_warn("given block not used");
+	    ary = rb_ary_new();
+#else
+	    rb_warning("passing a block to String#lines is deprecated");
+	    wantarray = 0;
+#endif
+	}
+    }
+    else {
+	if (wantarray)
+	    ary = rb_ary_new();
+	else
+	    RETURN_ENUMERATOR(str, argc, argv);
+    }
+
     if (NIL_P(rs)) {
-	rb_yield(str);
-	return orig;
+	if (wantarray) {
+	    rb_ary_push(ary, str);
+	    return ary;
+	}
+	else {
+	    rb_yield(str);
+	    return orig;
+	}
     }
     str = rb_str_new4(str);
     ptr = p = s = RSTRING_PTR(str);
@@ -6141,7 +6167,10 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
 	    line = rb_str_new5(str, s, p - s);
 	    OBJ_INFECT(line, str);
 	    rb_enc_cr_str_copy_for_substr(line, str);
-	    rb_yield(line);
+	    if (wantarray)
+		rb_ary_push(ary, line);
+	    else
+		rb_yield(line);
 	    str_mod_check(str, ptr, len);
 	    s = p;
 	}
@@ -6177,7 +6206,10 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
 	    line = rb_str_new5(str, s, p - s + (rslen ? rslen : n));
 	    OBJ_INFECT(line, str);
 	    rb_enc_cr_str_copy_for_substr(line, str);
-	    rb_yield(line);
+	    if (wantarray)
+		rb_ary_push(ary, line);
+	    else
+		rb_yield(line);
 	    str_mod_check(str, ptr, len);
 	    s = p + (rslen ? rslen : n);
 	}
@@ -6189,23 +6221,127 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
 	line = rb_str_new5(str, s, pend - s);
 	OBJ_INFECT(line, str);
 	rb_enc_cr_str_copy_for_substr(line, str);
-	rb_yield(line);
+	if (wantarray)
+	    rb_ary_push(ary, line);
+	else
+	    rb_yield(line);
+	RB_GC_GUARD(str);
     }
 
-    return orig;
+    if (wantarray)
+	return ary;
+    else
+	return orig;
 }
-
 
 /*
  *  call-seq:
- *     str.bytes {|fixnum| block }        -> str
- *     str.bytes                          -> an_enumerator
+ *     str.each_line(separator=$/) {|substr| block }   -> str
+ *     str.each_line(separator=$/)                     -> an_enumerator
  *
+ *  Splits <i>str</i> using the supplied parameter as the record
+ *  separator (<code>$/</code> by default), passing each substring in
+ *  turn to the supplied block.  If a zero-length record separator is
+ *  supplied, the string is split into paragraphs delimited by
+ *  multiple successive newlines.
+ *
+ *  If no block is given, an enumerator is returned instead.
+ *
+ *     print "Example one\n"
+ *     "hello\nworld".each_line {|s| p s}
+ *     print "Example two\n"
+ *     "hello\nworld".each_line('l') {|s| p s}
+ *     print "Example three\n"
+ *     "hello\n\n\nworld".each_line('') {|s| p s}
+ *
+ *  <em>produces:</em>
+ *
+ *     Example one
+ *     "hello\n"
+ *     "world"
+ *     Example two
+ *     "hel"
+ *     "l"
+ *     "o\nworl"
+ *     "d"
+ *     Example three
+ *     "hello\n\n\n"
+ *     "world"
+ */
+
+static VALUE
+rb_str_each_line(int argc, VALUE *argv, VALUE str)
+{
+    return rb_str_enumerate_lines(argc, argv, str, 0);
+}
+
+/*
+ *  call-seq:
+ *     str.lines(separator=$/)  -> an_array
+ *
+ *  Returns an array of lines in <i>str</i> split using the supplied
+ *  record separator (<code>$/</code> by default).  This is a
+ *  shorthand for <code>str.each_line(separator).to_a</code>.
+ *
+ *  If a block is given, which is a deprecated form, works the same as
+ *  <code>each_line</code>.
+ */
+
+static VALUE
+rb_str_lines(int argc, VALUE *argv, VALUE str)
+{
+    return rb_str_enumerate_lines(argc, argv, str, 1);
+}
+
+static VALUE
+rb_str_each_byte_size(VALUE str, VALUE args)
+{
+    return LONG2FIX(RSTRING_LEN(str));
+}
+
+static VALUE
+rb_str_enumerate_bytes(VALUE str, int wantarray)
+{
+    long i;
+    VALUE ary;
+
+    if (rb_block_given_p()) {
+	if (wantarray) {
+#if 0 /* next major */
+	    rb_warn("given block not used");
+	    ary = rb_ary_new();
+#else
+	    rb_warning("passing a block to String#bytes is deprecated");
+	    wantarray = 0;
+#endif
+	}
+    }
+    else {
+	if (wantarray)
+	    ary = rb_ary_new2(RSTRING_LEN(str));
+	else
+	    RETURN_SIZED_ENUMERATOR(str, 0, 0, rb_str_each_byte_size);
+    }
+
+    for (i=0; i<RSTRING_LEN(str); i++) {
+	if (wantarray)
+	    rb_ary_push(ary, INT2FIX(RSTRING_PTR(str)[i] & 0xff));
+	else
+	    rb_yield(INT2FIX(RSTRING_PTR(str)[i] & 0xff));
+    }
+    if (wantarray)
+	return ary;
+    else
+	return str;
+}
+
+/*
+ *  call-seq:
  *     str.each_byte {|fixnum| block }    -> str
  *     str.each_byte                      -> an_enumerator
  *
- *  Passes each byte in <i>str</i> to the given block, or returns
- *  an enumerator if no block is given.
+ *  Passes each byte in <i>str</i> to the given block, or returns an
+ *  enumerator if no block is given.
  *
  *     "hello".each_byte {|c| print c, ' ' }
  *
@@ -6217,21 +6353,100 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
 static VALUE
 rb_str_each_byte(VALUE str)
 {
-    long i;
-
-    RETURN_ENUMERATOR(str, 0, 0);
-    for (i=0; i<RSTRING_LEN(str); i++) {
-	rb_yield(INT2FIX(RSTRING_PTR(str)[i] & 0xff));
-    }
-    return str;
+    return rb_str_enumerate_bytes(str, 0);
 }
-
 
 /*
  *  call-seq:
- *     str.chars {|cstr| block }        -> str
- *     str.chars                        -> an_enumerator
+ *     str.bytes    -> an_array
  *
+ *  Returns an array of bytes in <i>str</i>.  This is a shorthand for
+ *  <code>str.each_byte.to_a</code>.
+ *
+ *  If a block is given, which is a deprecated form, works the same as
+ *  <code>each_byte</code>.
+ */
+
+static VALUE
+rb_str_bytes(VALUE str)
+{
+    return rb_str_enumerate_bytes(str, 1);
+}
+
+static VALUE
+rb_str_each_char_size(VALUE str)
+{
+    long len = RSTRING_LEN(str);
+    if (!single_byte_optimizable(str)) {
+	const char *ptr = RSTRING_PTR(str);
+	rb_encoding *enc = rb_enc_get(str);
+	const char *end_ptr = ptr + len;
+	for (len = 0; ptr < end_ptr; ++len) {
+	    ptr += rb_enc_mbclen(ptr, end_ptr, enc);
+	}
+    }
+    return LONG2FIX(len);
+}
+
+static VALUE
+rb_str_enumerate_chars(VALUE str, int wantarray)
+{
+    VALUE orig = str;
+    long i, len, n;
+    const char *ptr;
+    rb_encoding *enc;
+    VALUE ary;
+
+    if (rb_block_given_p()) {
+	if (wantarray) {
+#if 0 /* next major */
+	    rb_warn("given block not used");
+	    ary = rb_ary_new();
+#else
+	    rb_warning("passing a block to String#chars is deprecated");
+	    wantarray = 0;
+#endif
+	}
+    }
+    else {
+	if (wantarray)
+	    ary = rb_ary_new();
+	else
+	    RETURN_SIZED_ENUMERATOR(str, 0, 0, rb_str_each_char_size);
+    }
+
+    str = rb_str_new4(str);
+    ptr = RSTRING_PTR(str);
+    len = RSTRING_LEN(str);
+    enc = rb_enc_get(str);
+    switch (ENC_CODERANGE(str)) {
+      case ENC_CODERANGE_VALID:
+      case ENC_CODERANGE_7BIT:
+	for (i = 0; i < len; i += n) {
+	    n = rb_enc_fast_mbclen(ptr + i, ptr + len, enc);
+	    if (wantarray)
+		rb_ary_push(ary, rb_str_subseq(str, i, n));
+	    else
+		rb_yield(rb_str_subseq(str, i, n));
+	}
+	break;
+      default:
+	for (i = 0; i < len; i += n) {
+	    n = rb_enc_mbclen(ptr + i, ptr + len, enc);
+	    if (wantarray)
+		rb_ary_push(ary, rb_str_subseq(str, i, n));
+	    else
+		rb_yield(rb_str_subseq(str, i, n));
+	}
+    }
+    if (wantarray)
+	return ary;
+    else
+	return orig;
+}
+
+/*
+ *  call-seq:
  *     str.each_char {|cstr| block }    -> str
  *     str.each_char                    -> an_enumerator
  *
@@ -6248,38 +6463,79 @@ rb_str_each_byte(VALUE str)
 static VALUE
 rb_str_each_char(VALUE str)
 {
-    VALUE orig = str;
-    long i, len, n;
-    const char *ptr;
-    rb_encoding *enc;
-
-    RETURN_ENUMERATOR(str, 0, 0);
-    str = rb_str_new4(str);
-    ptr = RSTRING_PTR(str);
-    len = RSTRING_LEN(str);
-    enc = rb_enc_get(str);
-    switch (ENC_CODERANGE(str)) {
-      case ENC_CODERANGE_VALID:
-      case ENC_CODERANGE_7BIT:
-	for (i = 0; i < len; i += n) {
-	    n = rb_enc_fast_mbclen(ptr + i, ptr + len, enc);
-	    rb_yield(rb_str_subseq(str, i, n));
-	}
-	break;
-      default:
-	for (i = 0; i < len; i += n) {
-	    n = rb_enc_mbclen(ptr + i, ptr + len, enc);
-	    rb_yield(rb_str_subseq(str, i, n));
-	}
-    }
-    return orig;
+    return rb_str_enumerate_chars(str, 0);
 }
 
 /*
  *  call-seq:
- *     str.codepoints {|integer| block }        -> str
- *     str.codepoints                           -> an_enumerator
+ *     str.chars    -> an_array
  *
+ *  Returns an array of characters in <i>str</i>.  This is a shorthand
+ *  for <code>str.each_char.to_a</code>.
+ *
+ *  If a block is given, which is a deprecated form, works the same as
+ *  <code>each_char</code>.
+ */
+
+static VALUE
+rb_str_chars(VALUE str)
+{
+    return rb_str_enumerate_chars(str, 1);
+}
+
+
+static VALUE
+rb_str_enumerate_codepoints(VALUE str, int wantarray)
+{
+    VALUE orig = str;
+    int n;
+    unsigned int c;
+    const char *ptr, *end;
+    rb_encoding *enc;
+    VALUE ary;
+
+    if (single_byte_optimizable(str))
+	return rb_str_enumerate_bytes(str, wantarray);
+
+    if (rb_block_given_p()) {
+	if (wantarray) {
+#if 0 /* next major */
+	    rb_warn("given block not used");
+	    ary = rb_ary_new();
+#else
+	    rb_warning("passing a block to String#codepoints is deprecated");
+	    wantarray = 0;
+#endif
+	}
+    }
+    else {
+	if (wantarray)
+	    ary = rb_ary_new();
+	else
+	    RETURN_SIZED_ENUMERATOR(str, 0, 0, rb_str_each_char_size);
+    }
+
+    str = rb_str_new4(str);
+    ptr = RSTRING_PTR(str);
+    end = RSTRING_END(str);
+    enc = STR_ENC_GET(str);
+    while (ptr < end) {
+	c = rb_enc_codepoint_len(ptr, end, &n, enc);
+	if (wantarray)
+	    rb_ary_push(ary, UINT2NUM(c));
+	else
+	    rb_yield(UINT2NUM(c));
+	ptr += n;
+    }
+    RB_GC_GUARD(str);
+    if (wantarray)
+	return ary;
+    else
+	return orig;
+}
+
+/*
+ *  call-seq:
  *     str.each_codepoint {|integer| block }    -> str
  *     str.each_codepoint                       -> an_enumerator
  *
@@ -6299,25 +6555,27 @@ rb_str_each_char(VALUE str)
 static VALUE
 rb_str_each_codepoint(VALUE str)
 {
-    VALUE orig = str;
-    int n;
-    unsigned int c;
-    const char *ptr, *end;
-    rb_encoding *enc;
-
-    if (single_byte_optimizable(str)) return rb_str_each_byte(str);
-    RETURN_ENUMERATOR(str, 0, 0);
-    str = rb_str_new4(str);
-    ptr = RSTRING_PTR(str);
-    end = RSTRING_END(str);
-    enc = STR_ENC_GET(str);
-    while (ptr < end) {
-	c = rb_enc_codepoint_len(ptr, end, &n, enc);
-	rb_yield(UINT2NUM(c));
-	ptr += n;
-    }
-    return orig;
+    return rb_str_enumerate_codepoints(str, 0);
 }
+
+/*
+ *  call-seq:
+ *     str.codepoints   -> an_array
+ *
+ *  Returns an array of the <code>Integer</code> ordinals of the
+ *  characters in <i>str</i>.  This is a shorthand for
+ *  <code>str.each_codepoint.to_a</code>.
+ *
+ *  If a block is given, which is a deprecated form, works the same as
+ *  <code>each_codepoint</code>.
+ */
+
+static VALUE
+rb_str_codepoints(VALUE str)
+{
+    return rb_str_enumerate_codepoints(str, 1);
+}
+
 
 static long
 chopped_length(VALUE str)
@@ -6862,6 +7120,7 @@ rb_str_crypt(VALUE str, VALUE salt)
     extern char *crypt(const char *, const char *);
     VALUE result;
     const char *s, *saltp;
+    char *res;
 #ifdef BROKEN_CRYPT
     char salt_8bit_clean[3];
 #endif
@@ -6881,7 +7140,11 @@ rb_str_crypt(VALUE str, VALUE salt)
 	saltp = salt_8bit_clean;
     }
 #endif
-    result = rb_str_new2(crypt(s, saltp));
+    res = crypt(s, saltp);
+    if (!res) {
+	rb_sys_fail("crypt");
+    }
+    result = rb_str_new2(res);
     OBJ_INFECT(result, str);
     OBJ_INFECT(result, salt);
     return result;
@@ -7340,6 +7603,23 @@ rb_str_force_encoding(VALUE str, VALUE enc)
 
 /*
  *  call-seq:
+ *     str.b   -> str
+ *
+ *  Returns a copied string whose encoding is ASCII-8BIT.
+ */
+
+static VALUE
+rb_str_b(VALUE str)
+{
+    VALUE str2 = str_alloc(rb_cString);
+    str_replace_shared_without_enc(str2, str);
+    OBJ_INFECT(str2, str);
+    ENC_CODERANGE_SET(str2, ENC_CODERANGE_VALID);
+    return str2;
+}
+
+/*
+ *  call-seq:
  *     str.valid_encoding?  -> true or false
  *
  *  Returns true for a string which encoded correctly.
@@ -7585,15 +7865,18 @@ sym_to_sym(VALUE sym)
 }
 
 static VALUE
-sym_call(VALUE args, VALUE sym, int argc, VALUE *argv)
+sym_call(VALUE args, VALUE p, int argc, VALUE *argv)
 {
     VALUE obj;
+    NODE *memo = RNODE(p);
 
     if (argc < 1) {
 	rb_raise(rb_eArgError, "no receiver given");
     }
     obj = argv[0];
-    return rb_funcall_passing_block(obj, (ID)sym, argc - 1, argv + 1);
+    return rb_funcall_passing_block_with_refinements(obj, (ID) memo->u1.id,
+						     argc - 1, argv + 1,
+						     memo->u2.value);
 }
 
 /*
@@ -7613,25 +7896,32 @@ sym_to_proc(VALUE sym)
     VALUE proc;
     long id, index;
     VALUE *aryp;
-
-    if (!sym_proc_cache) {
-	sym_proc_cache = rb_ary_tmp_new(SYM_PROC_CACHE_SIZE * 2);
-	rb_gc_register_mark_object(sym_proc_cache);
-	rb_ary_store(sym_proc_cache, SYM_PROC_CACHE_SIZE*2 - 1, Qnil);
-    }
+    const NODE *cref = rb_vm_cref();
 
     id = SYM2ID(sym);
-    index = (id % SYM_PROC_CACHE_SIZE) << 1;
+    if (NIL_P(cref->nd_refinements)) {
+	if (!sym_proc_cache) {
+	    sym_proc_cache = rb_ary_tmp_new(SYM_PROC_CACHE_SIZE * 2);
+	    rb_gc_register_mark_object(sym_proc_cache);
+	    rb_ary_store(sym_proc_cache, SYM_PROC_CACHE_SIZE*2 - 1, Qnil);
+	}
 
-    aryp = RARRAY_PTR(sym_proc_cache);
-    if (aryp[index] == sym) {
-	return aryp[index + 1];
+	index = (id % SYM_PROC_CACHE_SIZE) << 1;
+	aryp = RARRAY_PTR(sym_proc_cache);
+	if (aryp[index] == sym) {
+	    return aryp[index + 1];
+	}
+	else {
+	    proc = rb_proc_new(sym_call,
+			       (VALUE) NEW_MEMO(id, Qnil, 0));
+	    aryp[index] = sym;
+	    aryp[index + 1] = proc;
+	    return proc;
+	}
     }
     else {
-	proc = rb_proc_new(sym_call, (VALUE)id);
-	aryp[index] = sym;
-	aryp[index + 1] = proc;
-	return proc;
+	return rb_proc_new(sym_call,
+			   (VALUE) NEW_MEMO(id, cref->nd_refinements, 0));
     }
 }
 
@@ -7847,7 +8137,7 @@ Init_String(void)
 
     rb_cString  = rb_define_class("String", rb_cObject);
     rb_include_module(rb_cString, rb_mComparable);
-    rb_define_alloc_func(rb_cString, str_alloc);
+    rb_define_alloc_func(rb_cString, empty_str_alloc);
     rb_define_singleton_method(rb_cString, "try_convert", rb_str_s_try_convert, 1);
     rb_define_method(rb_cString, "initialize", rb_str_init, -1);
     rb_define_method(rb_cString, "initialize_copy", rb_str_replace, 1);
@@ -7903,10 +8193,10 @@ Init_String(void)
     rb_define_method(rb_cString, "hex", rb_str_hex, 0);
     rb_define_method(rb_cString, "oct", rb_str_oct, 0);
     rb_define_method(rb_cString, "split", rb_str_split_m, -1);
-    rb_define_method(rb_cString, "lines", rb_str_each_line, -1);
-    rb_define_method(rb_cString, "bytes", rb_str_each_byte, 0);
-    rb_define_method(rb_cString, "chars", rb_str_each_char, 0);
-    rb_define_method(rb_cString, "codepoints", rb_str_each_codepoint, 0);
+    rb_define_method(rb_cString, "lines", rb_str_lines, -1);
+    rb_define_method(rb_cString, "bytes", rb_str_bytes, 0);
+    rb_define_method(rb_cString, "chars", rb_str_chars, 0);
+    rb_define_method(rb_cString, "codepoints", rb_str_codepoints, 0);
     rb_define_method(rb_cString, "reverse", rb_str_reverse, 0);
     rb_define_method(rb_cString, "reverse!", rb_str_reverse_bang, 0);
     rb_define_method(rb_cString, "concat", rb_str_concat, 1);
@@ -7969,6 +8259,7 @@ Init_String(void)
 
     rb_define_method(rb_cString, "encoding", rb_obj_encoding, 0); /* in encoding.c */
     rb_define_method(rb_cString, "force_encoding", rb_str_force_encoding, 1);
+    rb_define_method(rb_cString, "b", rb_str_b, 0);
     rb_define_method(rb_cString, "valid_encoding?", rb_str_valid_encoding_p, 0);
     rb_define_method(rb_cString, "ascii_only?", rb_str_is_ascii_only_p, 0);
 

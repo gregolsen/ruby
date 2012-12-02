@@ -244,6 +244,10 @@ rb_cloexec_dup2(int oldfd, int newfd)
         }
 #else
         ret = dup2(oldfd, newfd);
+# ifdef _WIN32
+	if (newfd >= 0 && newfd <= 2)
+	    SetStdHandle(newfd == 0 ? STD_INPUT_HANDLE : newfd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE, (HANDLE)rb_w32_get_osfhandle(newfd));
+# endif
 #endif
         if (ret == -1) return -1;
     }
@@ -837,8 +841,7 @@ ruby_dup(int orig)
 static VALUE
 io_alloc(VALUE klass)
 {
-    NEWOBJ(io, struct RFile);
-    OBJSETUP(io, klass, T_FILE);
+    NEWOBJ_OF(io, struct RFile, klass, T_FILE);
 
     io->fptr = 0;
 
@@ -975,9 +978,7 @@ io_fflush(rb_io_t *fptr)
     rb_io_check_closed(fptr);
     if (fptr->wbuf.len == 0)
         return 0;
-    if (!rb_thread_fd_writable(fptr->fd)) {
-        rb_io_check_closed(fptr);
-    }
+    rb_io_check_closed(fptr);
     while (fptr->wbuf.len > 0 && io_flush_buffer(fptr) != 0) {
 	if (!rb_io_wait_writable(fptr->fd))
 	    return -1;
@@ -1132,7 +1133,12 @@ io_binwrite(VALUE str, const char *ptr, long len, rb_io_t *fptr, int nosync)
         (fptr->wbuf.ptr && fptr->wbuf.capa <= fptr->wbuf.len + len)) {
 	struct binwrite_arg arg;
 
-        /* xxx: use writev to avoid double write if available */
+	/*
+	 * xxx: use writev to avoid double write if available
+	 * writev may help avoid context switch between "a" and "\n" in
+	 * STDERR.puts "a" [ruby-dev:25080] (rebroken since native threads
+	 * introduced in 1.9)
+	 */
         if (fptr->wbuf.len && fptr->wbuf.len+len <= fptr->wbuf.capa) {
             if (fptr->wbuf.capa < fptr->wbuf.off+fptr->wbuf.len+len) {
                 MEMMOVE(fptr->wbuf.ptr, fptr->wbuf.ptr+fptr->wbuf.off, char, fptr->wbuf.len);
@@ -1146,11 +1152,8 @@ io_binwrite(VALUE str, const char *ptr, long len, rb_io_t *fptr, int nosync)
             return -1L;
         if (n == 0)
             return len;
-        /* avoid context switch between "a" and "\n" in STDERR.puts "a".
-           [ruby-dev:25080] */
-	if (fptr->stdio_file != stderr && !rb_thread_fd_writable(fptr->fd)) {
-	    rb_io_check_closed(fptr);
-	}
+
+	rb_io_check_closed(fptr);
 	arg.fptr = fptr;
 	arg.str = str;
       retry:
@@ -1912,7 +1915,6 @@ io_bufread(char *ptr, long len, rb_io_t *fptr)
 	    }
 	    offset += c;
 	    if ((n -= c) <= 0) break;
-	    rb_thread_wait_fd(fptr->fd);
 	}
 	return len - n;
     }
@@ -1923,7 +1925,6 @@ io_bufread(char *ptr, long len, rb_io_t *fptr)
 	    offset += c;
 	    if ((n -= c) <= 0) break;
 	}
-	rb_thread_wait_fd(fptr->fd);
 	rb_io_check_closed(fptr);
 	if (io_fillbuf(fptr) < 0) {
 	    break;
@@ -2160,6 +2161,15 @@ io_setstrbuf(VALUE *str, long len)
     rb_str_modify_expand(*str, len);
 }
 
+static void
+io_set_read_length(VALUE str, long n)
+{
+    if (RSTRING_LEN(str) != n) {
+	rb_str_modify(str);
+	rb_str_set_len(str, n);
+    }
+}
+
 static VALUE
 read_all(rb_io_t *fptr, long siz, VALUE str)
 {
@@ -2283,7 +2293,7 @@ io_getpartial(int argc, VALUE *argv, VALUE io, int nonblock)
             rb_sys_fail_path(fptr->pathv);
         }
     }
-    rb_str_set_len(str, n);
+    io_set_read_length(str, n);
 
     if (n == 0)
         return Qnil;
@@ -2604,7 +2614,7 @@ io_read(int argc, VALUE *argv, VALUE io)
     previous_mode = set_binary_mode_with_seek_cur(fptr);
 #endif
     n = io_fread(str, 0, len, fptr);
-    rb_str_set_len(str, n);
+    io_set_read_length(str, n);
 #if defined(RUBY_TEST_CRLF_ENVIRONMENT) || defined(_WIN32)
     if (previous_mode == O_TEXT) {
 	setmode(fptr->fd, O_TEXT);
@@ -3855,10 +3865,51 @@ finish_writeconv_sync(VALUE arg)
     return finish_writeconv(p->fptr, p->noalloc);
 }
 
+static void*
+nogvl_close(void *ptr)
+{
+    int *fd = ptr;
+
+    return (void*)(intptr_t)close(*fd);
+}
+
+static int
+maygvl_close(int fd, int keepgvl)
+{
+    if (keepgvl)
+	return close(fd);
+
+    /*
+     * close() may block for certain file types (NFS, SO_LINGER sockets,
+     * inotify), so let other threads run.
+     */
+    return (int)(intptr_t)rb_thread_call_without_gvl(nogvl_close, &fd, RUBY_UBF_IO, 0);
+}
+
+static void*
+nogvl_fclose(void *ptr)
+{
+    FILE *file = ptr;
+
+    return (void*)(intptr_t)fclose(file);
+}
+
+static int
+maygvl_fclose(FILE *file, int keepgvl)
+{
+    if (keepgvl)
+	return fclose(file);
+
+    return (int)(intptr_t)rb_thread_call_without_gvl(nogvl_fclose, file, RUBY_UBF_IO, 0);
+}
+
 static void
 fptr_finalize(rb_io_t *fptr, int noraise)
 {
     VALUE err = Qnil;
+    int fd = fptr->fd;
+    FILE *stdio_file = fptr->stdio_file;
+
     if (fptr->writeconv) {
 	if (fptr->write_lock && !noraise) {
             struct finish_writeconv_arg arg;
@@ -3880,26 +3931,27 @@ fptr_finalize(rb_io_t *fptr, int noraise)
 		err = INT2NUM(errno);
 	}
     }
-    if (IS_PREP_STDIO(fptr) || fptr->fd <= 2) {
-        goto skip_fd_close;
-    }
-    if (fptr->stdio_file) {
-        /* fptr->stdio_file is deallocated anyway
-         * even if fclose failed.  */
-        if (fclose(fptr->stdio_file) < 0 && NIL_P(err))
-            err = noraise ? Qtrue : INT2NUM(errno);
-    }
-    else if (0 <= fptr->fd) {
-        /* fptr->fd may be closed even if close fails.
-         * POSIX doesn't specify it.
-         * We assumes it is closed.  */
-        if (close(fptr->fd) < 0 && NIL_P(err))
-            err = noraise ? Qtrue : INT2NUM(errno);
-    }
-  skip_fd_close:
+
     fptr->fd = -1;
     fptr->stdio_file = 0;
     fptr->mode &= ~(FMODE_READABLE|FMODE_WRITABLE);
+
+    if (IS_PREP_STDIO(fptr) || fd <= 2) {
+	/* need to keep FILE objects of stdin, stdout and stderr */
+    }
+    else if (stdio_file) {
+	/* stdio_file is deallocated anyway
+         * even if fclose failed.  */
+	if ((maygvl_fclose(stdio_file, noraise) < 0) && NIL_P(err))
+	    err = noraise ? Qtrue : INT2NUM(errno);
+    }
+    else if (0 <= fd) {
+	/* fptr->fd may be closed even if close fails.
+         * POSIX doesn't specify it.
+         * We assumes it is closed.  */
+	if ((maygvl_close(fd, noraise) < 0) && NIL_P(err))
+	    err = noraise ? Qtrue : INT2NUM(errno);
+    }
 
     if (!NIL_P(err) && !noraise) {
         switch(TYPE(err)) {
@@ -4011,15 +4063,11 @@ rb_io_close(VALUE io)
     if (fptr->fd < 0) return Qnil;
 
     fd = fptr->fd;
-#if defined __APPLE__ && (!defined(MAC_OS_X_VERSION_MIN_ALLOWED) || MAC_OS_X_VERSION_MIN_ALLOWED <= 1050)
-    /* close(2) on a fd which is being read by another thread causes
-     * deadlock on Mac OS X 10.5 */
     rb_thread_fd_close(fd);
-#endif
     rb_io_fptr_cleanup(fptr, FALSE);
-    rb_thread_fd_close(fd);
 
     if (fptr->pid) {
+        rb_last_status_clear();
 	rb_syswait(fptr->pid);
 	fptr->pid = 0;
     }
@@ -4287,9 +4335,6 @@ rb_io_syswrite(VALUE io, VALUE str)
     if (fptr->wbuf.len) {
 	rb_warn("syswrite for buffered IO");
     }
-    if (!rb_thread_fd_writable(fptr->fd)) {
-        rb_io_check_closed(fptr);
-    }
 
     n = rb_write_internal(fptr->fd, RSTRING_PTR(str), RSTRING_LEN(str));
 
@@ -4337,7 +4382,16 @@ rb_io_sysread(int argc, VALUE *argv, VALUE io)
     }
 
     n = fptr->fd;
+
+    /*
+     * FIXME: removing rb_thread_wait_fd() here changes sysread semantics
+     * on non-blocking IOs.  However, it's still currently possible
+     * for sysread to raise Errno::EAGAIN if another thread read()s
+     * the IO after we return from rb_thread_wait_fd() but before
+     * we call read()
+     */
     rb_thread_wait_fd(fptr->fd);
+
     rb_io_check_closed(fptr);
 
     io_setstrbuf(&str, ilen);
@@ -4348,7 +4402,7 @@ rb_io_sysread(int argc, VALUE *argv, VALUE io)
     if (n == -1) {
 	rb_sys_fail_path(fptr->pathv);
     }
-    rb_str_set_len(str, n);
+    io_set_read_length(str, n);
     if (n == 0 && ilen > 0) {
 	rb_eof_error();
     }
@@ -4739,23 +4793,6 @@ parse_mode_enc(const char *estr, rb_encoding **enc_p, rb_encoding **enc2_p, int 
     }
 
     rb_io_ext_int_to_encs(ext_enc, int_enc, enc_p, enc2_p);
-}
-
-static void
-mode_enc(rb_io_t *fptr, const char *estr)
-{
-    clear_codeconv(fptr);
-
-    parse_mode_enc(estr, &fptr->encs.enc, &fptr->encs.enc2, NULL);
-}
-
-static void
-rb_io_mode_enc(rb_io_t *fptr, const char *modestr)
-{
-    const char *p = strchr(modestr, ':');
-    if (p) {
-	mode_enc(fptr, p+1);
-    }
 }
 
 int
@@ -5506,8 +5543,10 @@ pipe_open(VALUE execarg_obj, const char *modestr, int fmode, convconfig_t *convc
 				      spawnv(P_NOWAIT, (cmd), (args)) : \
 				      spawn(P_NOWAIT, (cmd)))
 # endif
+# if !defined(HAVE_FORK)
     char **args = NULL;
     char **envp = NULL;
+# endif
 #endif
 #if !defined(HAVE_FORK)
     struct rb_execarg sarg, *sargp = &sarg;
@@ -6291,12 +6330,12 @@ io_reopen(VALUE io, VALUE nfile)
 static VALUE
 rb_io_reopen(int argc, VALUE *argv, VALUE file)
 {
-    VALUE fname, nmode;
+    VALUE fname, nmode, opt;
     int oflags;
     rb_io_t *fptr;
 
     rb_secure(4);
-    if (rb_scan_args(argc, argv, "11", &fname, &nmode) == 1) {
+    if (rb_scan_args(argc, argv, "11:", &fname, &nmode, &opt) == 1) {
 	VALUE tmp = rb_io_check_io(fname);
 	if (!NIL_P(tmp)) {
 	    return io_reopen(file, tmp);
@@ -6311,8 +6350,11 @@ rb_io_reopen(int argc, VALUE *argv, VALUE file)
 	MEMZERO(fptr, rb_io_t, 1);
     }
 
-    if (!NIL_P(nmode)) {
-	int fmode = rb_io_modestr_fmode(StringValueCStr(nmode));
+    if (!NIL_P(nmode) || !NIL_P(opt)) {
+	int fmode;
+	convconfig_t convconfig;
+
+	rb_io_extract_modeenc(&nmode, 0, opt, &oflags, &fmode, &convconfig);
 	if (IS_PREP_STDIO(fptr) &&
             ((fptr->mode & FMODE_READWRITE) & (fmode & FMODE_READWRITE)) !=
             (fptr->mode & FMODE_READWRITE)) {
@@ -6322,13 +6364,13 @@ rb_io_reopen(int argc, VALUE *argv, VALUE file)
 		     rb_io_fmode_modestr(fmode));
 	}
 	fptr->mode = fmode;
-	rb_io_mode_enc(fptr, StringValueCStr(nmode));
-        fptr->encs.ecflags = 0;
-        fptr->encs.ecopts = Qnil;
+	fptr->encs = convconfig;
+    }
+    else {
+	oflags = rb_io_fmode_oflags(fptr->mode);
     }
 
     fptr->pathv = rb_str_new_frozen(fname);
-    oflags = rb_io_fmode_oflags(fptr->mode);
     if (fptr->fd < 0) {
         fptr->fd = rb_sysopen(fptr->pathv, oflags, 0666);
 	fptr->stdio_file = 0;
@@ -6920,31 +6962,32 @@ rb_io_stdio_file(rb_io_t *fptr)
  *
  *  Ruby allows the following open modes:
  *
- *  "r"  :: Read-only, starts at beginning of file  (default mode).
+ *  	"r"  Read-only, starts at beginning of file  (default mode).
  *
- *  "r+" :: Read-write, starts at beginning of file.
+ *  	"r+" Read-write, starts at beginning of file.
  *
- *  "w"  :: Write-only, truncates existing file
- *          to zero length or creates a new file for writing.
+ *  	"w"  Write-only, truncates existing file
+ *  	     to zero length or creates a new file for writing.
  *
- *  "w+" :: Read-write, truncates existing file to zero length
- *          or creates a new file for reading and writing.
+ *  	"w+" Read-write, truncates existing file to zero length
+ *  	     or creates a new file for reading and writing.
  *
- *  "a"  :: Write-only, starts at end of file if file exists,
- *          otherwise creates a new file for writing.
+ *  	"a"  Write-only, starts at end of file if file exists,
+ *  	     otherwise creates a new file for writing.
  *
- *  "a+" :: Read-write, starts at end of file if file exists,
- *          otherwise creates a new file for reading and
- *          writing.
+ *  	"a+" Read-write, starts at end of file if file exists,
+ *	     otherwise creates a new file for reading and
+ *  	     writing.
  *
- *  "b"  :: Binary file mode (may appear with
- *          any of the key letters listed above).
- *          Suppresses EOL <-> CRLF conversion on Windows. And
- *          sets external encoding to ASCII-8BIT unless explicitly
- *          specified.
+ *  The following modes must be used separately, and along with one or more of
+ *  the modes seen above.
  *
- *  "t"  :: Text file mode (may appear with
- *          any of the key letters listed above except "b").
+ *  	"b"  Binary file mode
+ *  	     Suppresses EOL <-> CRLF conversion on Windows. And
+ *  	     sets external encoding to ASCII-8BIT unless explicitly
+ *  	     specified.
+ *
+ *  	"t"  Text file mode
  *
  *  When the open mode of original IO is read only, the mode cannot be
  *  changed to be writable.  Similarly, the open mode cannot be changed from
@@ -7806,6 +7849,7 @@ rb_f_backquote(VALUE obj, VALUE str)
     rb_io_t *fptr;
 
     SafeStringValue(str);
+    rb_last_status_clear();
     port = pipe_open_s(str, "r", FMODE_READABLE|DEFAULT_TEXTMODE, NULL);
     if (NIL_P(port)) return rb_str_new(0,0);
 
@@ -9792,7 +9836,6 @@ copy_stream_fallback_body(VALUE arg)
         }
         else {
             ssize_t ss;
-            rb_thread_wait_fd(stp->src_fd);
             rb_str_resize(buf, buflen);
             ss = maygvl_copy_stream_read(1, stp, RSTRING_PTR(buf), l, off);
             if (ss == -1)
@@ -11290,7 +11333,7 @@ argf_write(VALUE argf, VALUE str)
  *
  *    require 'io/console'
  *    rows, columns = $stdin.winsize
- *    puts "You screen is #{columns} wide and #{rows} tall"
+ *    puts "Your screen is #{columns} wide and #{rows} tall"
  */
 
 void
@@ -11503,6 +11546,7 @@ Init_IO(void)
     rb_define_method(rb_cARGF, "initialize", argf_initialize, -2);
     rb_define_method(rb_cARGF, "initialize_copy", argf_initialize_copy, 1);
     rb_define_method(rb_cARGF, "to_s", argf_to_s, 0);
+    rb_define_alias(rb_cARGF, "inspect", "to_s");
     rb_define_method(rb_cARGF, "argv", argf_argv, 0);
 
     rb_define_method(rb_cARGF, "fileno", argf_fileno, 0);
@@ -11586,58 +11630,6 @@ Init_IO(void)
     Init_File();
 
     rb_define_method(rb_cFile, "initialize",  rb_file_initialize, -1);
-
-    /* open for reading only */
-    rb_file_const("RDONLY", INT2FIX(O_RDONLY));
-    /* open for writing only */
-    rb_file_const("WRONLY", INT2FIX(O_WRONLY));
-    /* open for reading and writing */
-    rb_file_const("RDWR", INT2FIX(O_RDWR));
-    /* append on each write */
-    rb_file_const("APPEND", INT2FIX(O_APPEND));
-    /* create file if it does not exist */
-    rb_file_const("CREAT", INT2FIX(O_CREAT));
-    /* error if CREAT and the file exists */
-    rb_file_const("EXCL", INT2FIX(O_EXCL));
-#if defined(O_NDELAY) || defined(O_NONBLOCK)
-# ifndef O_NONBLOCK
-#   define O_NONBLOCK O_NDELAY
-# endif
-    /* do not block on open or for data to become available */
-    rb_file_const("NONBLOCK", INT2FIX(O_NONBLOCK));
-#endif
-    /* truncate size to 0 */
-    rb_file_const("TRUNC", INT2FIX(O_TRUNC));
-#ifdef O_NOCTTY
-    /* not to make opened IO the controlling terminal device */
-    rb_file_const("NOCTTY", INT2FIX(O_NOCTTY));
-#endif
-#ifndef O_BINARY
-# define  O_BINARY 0
-#endif
-    /* disable line code conversion */
-    rb_file_const("BINARY", INT2FIX(O_BINARY));
-#ifdef O_SYNC
-    rb_file_const("SYNC", INT2FIX(O_SYNC));
-#endif
-#ifdef O_DSYNC
-    rb_file_const("DSYNC", INT2FIX(O_DSYNC));
-#endif
-#ifdef O_RSYNC
-    rb_file_const("RSYNC", INT2FIX(O_RSYNC));
-#endif
-#ifdef O_NOFOLLOW
-    /* do not follow symlinks */
-    rb_file_const("NOFOLLOW", INT2FIX(O_NOFOLLOW)); /* FreeBSD, Linux */
-#endif
-#ifdef O_NOATIME
-    /* do not change atime */
-    rb_file_const("NOATIME", INT2FIX(O_NOATIME)); /* Linux */
-#endif
-#ifdef O_DIRECT
-    /*  Try to minimize cache effects of the I/O to and from this file. */
-    rb_file_const("DIRECT", INT2FIX(O_DIRECT));
-#endif
 
     sym_mode = ID2SYM(rb_intern("mode"));
     sym_perm = ID2SYM(rb_intern("perm"));

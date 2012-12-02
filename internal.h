@@ -28,6 +28,8 @@ struct rb_classext_struct {
     struct st_table *iv_tbl;
     struct st_table *const_tbl;
     VALUE origin;
+    VALUE refined_class;
+    rb_alloc_func_t allocator;
 };
 
 #undef RCLASS_SUPER
@@ -38,6 +40,7 @@ struct rb_classext_struct {
 #define RCLASS_M_TBL(c) (RCLASS(c)->m_tbl)
 #define RCLASS_IV_INDEX_TBL(c) (RCLASS(c)->iv_index_tbl)
 #define RCLASS_ORIGIN(c) (RCLASS_EXT(c)->origin)
+#define RCLASS_REFINED_CLASS(c) (RCLASS_EXT(c)->refined_class)
 
 struct vtm; /* defined by timev.h */
 
@@ -45,6 +48,7 @@ struct vtm; /* defined by timev.h */
 VALUE rb_ary_last(int, VALUE *, VALUE);
 void rb_ary_set_len(VALUE, long);
 VALUE rb_ary_cat(VALUE, const VALUE *, long);
+VALUE rb_ary_delete_same_obj(VALUE, VALUE);
 
 /* bignum.c */
 VALUE rb_big_fdiv(VALUE x, VALUE y);
@@ -58,6 +62,7 @@ VALUE rb_obj_protected_methods(int argc, VALUE *argv, VALUE obj);
 VALUE rb_obj_private_methods(int argc, VALUE *argv, VALUE obj);
 VALUE rb_obj_public_methods(int argc, VALUE *argv, VALUE obj);
 int rb_obj_basic_to_s_p(VALUE);
+VALUE rb_special_singleton_class(VALUE);
 void Init_class_hierarchy(void);
 
 /* compile.c */
@@ -65,6 +70,7 @@ int rb_dvar_defined(ID);
 int rb_local_defined(ID);
 int rb_parse_in_eval(void);
 int rb_parse_in_main(void);
+const char * rb_insns_name(int i);
 VALUE rb_insns_name_array(void);
 
 /* cont.c */
@@ -83,11 +89,15 @@ ID rb_id_encoding(void);
 /* encoding.c */
 void rb_gc_mark_encodings(void);
 
+/* enum.c */
+VALUE rb_enum_cycle_size(VALUE self, VALUE args);
+
 /* error.c */
 NORETURN(PRINTF_ARGS(void rb_compile_bug(const char*, int, const char*, ...), 3, 4));
 VALUE rb_check_backtrace(VALUE);
 NORETURN(void rb_async_bug_errno(const char *,int));
 const char *rb_builtin_type_name(int t);
+const char *rb_builtin_class_name(VALUE x);
 
 /* eval_error.c */
 void ruby_error_print(void);
@@ -102,7 +112,16 @@ VALUE rb_home_dir(const char *user, VALUE result);
 VALUE rb_realpath_internal(VALUE basedir, VALUE path, int strict);
 void rb_file_const(const char*, VALUE);
 int rb_file_load_ok(const char *);
+VALUE rb_file_expand_path_fast(VALUE, VALUE);
+VALUE rb_file_expand_path_internal(VALUE, VALUE, int, int, VALUE);
+VALUE rb_get_path_check_to_string(VALUE, int);
+VALUE rb_get_path_check_convert(VALUE, VALUE, int);
 void Init_File(void);
+
+#ifdef _WIN32
+/* file.c, win32/file.c */
+void rb_w32_init_file(void);
+#endif
 
 /* gc.c */
 void Init_heap(void);
@@ -122,6 +141,7 @@ VALUE rb_iseq_clone(VALUE iseqval, VALUE newcbase);
 
 /* load.c */
 VALUE rb_get_load_path(void);
+VALUE rb_get_expanded_load_path(void);
 NORETURN(void rb_load_fail(VALUE, const char*));
 
 /* math.c */
@@ -140,6 +160,7 @@ void Init_newline(void);
 
 /* numeric.c */
 int rb_num_to_uint(VALUE val, unsigned int *ret);
+VALUE num_interval_step_size(VALUE from, VALUE to, VALUE step, int excl);
 int ruby_float_step(VALUE from, VALUE to, VALUE step, int excl);
 double ruby_float_mod(double x, double y);
 
@@ -192,9 +213,13 @@ struct rb_execarg {
     unsigned chdir_given : 1;
     unsigned new_pgroup_given : 1;
     unsigned new_pgroup_flag : 1;
+    unsigned uid_given : 1;
+    unsigned gid_given : 1;
     rb_pid_t pgroup_pgid; /* asis(-1), new pgroup(0), specified pgroup (0<V). */
     VALUE rlimit_limits; /* Qfalse or [[rtype, softlim, hardlim], ...] */
     mode_t umask_mask;
+    rb_uid_t uid;
+    rb_gid_t gid;
     VALUE fd_dup2;
     VALUE fd_close;
     VALUE fd_open;
@@ -212,6 +237,7 @@ struct rb_execarg {
 #define ARGVSTR2ARGV(argv_str) ((char **)RSTRING_PTR(argv_str) + 1)
 
 rb_pid_t rb_fork_ruby(int *status);
+void rb_last_status_clear(void);
 
 /* rational.c */
 VALUE rb_lcm(VALUE x, VALUE y);
@@ -244,7 +270,7 @@ struct timeval rb_time_timeval(VALUE);
 
 /* thread.c */
 VALUE rb_obj_is_mutex(VALUE obj);
-VALUE ruby_suppress_tracing(VALUE (*func)(VALUE, int), VALUE arg, int always);
+VALUE rb_suppress_tracing(VALUE (*func)(VALUE), VALUE arg);
 void rb_thread_execute_interrupts(VALUE th);
 void rb_clear_trace_func(void);
 VALUE rb_get_coverages(void);
@@ -274,6 +300,7 @@ void rb_vm_bugreport(void);
 /* vm_eval.c */
 void Init_vm_eval(void);
 VALUE rb_current_realfilepath(void);
+VALUE rb_check_block_call(VALUE, ID, int, VALUE *, VALUE (*)(ANYARGS), VALUE);
 
 /* vm_method.c */
 void Init_eval_method(void);
@@ -284,7 +311,9 @@ void Init_prelude(void);
 
 /* vm_backtrace.c */
 void Init_vm_backtrace(void);
-VALUE rb_thread_backtrace(VALUE thval);
+VALUE vm_thread_backtrace(int argc, VALUE *argv, VALUE thval);
+VALUE vm_thread_backtrace_locations(int argc, VALUE *argv, VALUE thval);
+
 VALUE rb_make_backtrace(void);
 void rb_backtrace_print_as_bugreport(void);
 int rb_backtrace_p(VALUE obj);

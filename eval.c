@@ -18,10 +18,13 @@
 #include "ruby/encoding.h"
 #include "internal.h"
 #include "vm_core.h"
+#include "probes.h"
 
 #define numberof(array) (int)(sizeof(array) / sizeof((array)[0]))
 
 NORETURN(void rb_raise_jump(VALUE));
+
+NODE *rb_vm_get_cref(const rb_iseq_t *, const VALUE *);
 
 VALUE rb_eLocalJumpError;
 VALUE rb_eSysStackError;
@@ -497,7 +500,12 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg)
     }
 
     if (tag != TAG_FATAL) {
-	EXEC_EVENT_HOOK(th, RUBY_EVENT_RAISE, th->cfp->self, 0, 0);
+	if(RUBY_DTRACE_RAISE_ENABLED()) {
+	    RUBY_DTRACE_RAISE(rb_obj_classname(th->errinfo),
+		    rb_sourcefile(),
+		    rb_sourceline());
+	}
+	EXEC_EVENT_HOOK(th, RUBY_EVENT_RAISE, th->cfp->self, 0, 0, mesg);
     }
 }
 
@@ -646,7 +654,7 @@ rb_raise_jump(VALUE mesg)
 
     setup_exception(th, TAG_RAISE, mesg);
 
-    EXEC_EVENT_HOOK(th, RUBY_EVENT_C_RETURN, self, mid, klass);
+    EXEC_EVENT_HOOK(th, RUBY_EVENT_C_RETURN, self, mid, klass, Qnil);
     rb_thread_raised_clear(th);
     JUMP_TAG(TAG_RAISE);
 }
@@ -697,8 +705,8 @@ rb_rescue2(VALUE (* b_proc) (ANYARGS), VALUE data1,
     volatile VALUE e_info = th->errinfo;
     va_list args;
 
-    PUSH_TAG();
-    if ((state = EXEC_TAG()) == 0) {
+    TH_PUSH_TAG(th);
+    if ((state = TH_EXEC_TAG()) == 0) {
       retry_entry:
 	result = (*b_proc) (data1);
     }
@@ -741,7 +749,7 @@ rb_rescue2(VALUE (* b_proc) (ANYARGS), VALUE data1,
 	    }
 	}
     }
-    POP_TAG();
+    TH_POP_TAG();
     if (state)
 	JUMP_TAG(state);
 
@@ -768,15 +776,15 @@ rb_protect(VALUE (* proc) (VALUE), VALUE data, int * state)
 
     protect_tag.prev = th->protect_tag;
 
-    PUSH_TAG();
+    TH_PUSH_TAG(th);
     th->protect_tag = &protect_tag;
     MEMCPY(&org_jmpbuf, &(th)->root_jmpbuf, rb_jmpbuf_t, 1);
-    if ((status = EXEC_TAG()) == 0) {
+    if ((status = TH_EXEC_TAG()) == 0) {
 	SAVE_ROOT_JMPBUF(th, result = (*proc) (data));
     }
     MEMCPY(&(th)->root_jmpbuf, &org_jmpbuf, rb_jmpbuf_t, 1);
     th->protect_tag = protect_tag.prev;
-    POP_TAG();
+    TH_POP_TAG();
 
     if (state) {
 	*state = status;
@@ -962,12 +970,16 @@ static VALUE
 rb_mod_include(int argc, VALUE *argv, VALUE module)
 {
     int i;
+    ID id_append_features, id_included;
+
+    CONST_ID(id_append_features, "append_features");
+    CONST_ID(id_included, "included");
 
     for (i = 0; i < argc; i++)
 	Check_Type(argv[i], T_MODULE);
     while (argc--) {
-	rb_funcall(argv[argc], rb_intern("append_features"), 1, module);
-	rb_funcall(argv[argc], rb_intern("included"), 1, module);
+	rb_funcall(argv[argc], id_append_features, 1, module);
+	rb_funcall(argv[argc], id_included, 1, module);
     }
     return module;
 }
@@ -1022,6 +1034,261 @@ rb_mod_prepend(int argc, VALUE *argv, VALUE module)
 	rb_funcall(argv[argc], id_prepended, 1, module);
     }
     return module;
+}
+
+static
+void check_class_or_module(VALUE obj)
+{
+    if (!RB_TYPE_P(obj, T_CLASS) && !RB_TYPE_P(obj, T_MODULE)) {
+	VALUE str = rb_inspect(obj);
+	rb_raise(rb_eTypeError, "%s is not a class/module",
+		 StringValuePtr(str));
+    }
+}
+
+static VALUE
+hidden_identity_hash_new()
+{
+    VALUE hash = rb_hash_new();
+
+    rb_funcall(hash, rb_intern("compare_by_identity"), 0);
+    RBASIC(hash)->klass = 0;  /* hide from ObjectSpace */
+    return hash;
+}
+
+void
+rb_using_refinement(NODE *cref, VALUE klass, VALUE module)
+{
+    VALUE iclass, c, superclass = klass;
+
+    check_class_or_module(klass);
+    Check_Type(module, T_MODULE);
+    if (NIL_P(cref->nd_refinements)) {
+	cref->nd_refinements = hidden_identity_hash_new();
+    }
+    else {
+	if (cref->flags & NODE_FL_CREF_OMOD_SHARED) {
+	    cref->nd_refinements = rb_hash_dup(cref->nd_refinements);
+	    cref->flags &= ~NODE_FL_CREF_OMOD_SHARED;
+	}
+	if (!NIL_P(c = rb_hash_lookup(cref->nd_refinements, klass))) {
+	    superclass = c;
+	    while (c && TYPE(c) == T_ICLASS) {
+		if (RBASIC(c)->klass == module) {
+		    /* already used refinement */
+		    return;
+		}
+		c = RCLASS_SUPER(c);
+	    }
+	}
+    }
+    FL_SET(module, RMODULE_IS_OVERLAID);
+    c = iclass = rb_include_class_new(module, superclass);
+    RCLASS_REFINED_CLASS(c) = klass;
+    module = RCLASS_SUPER(module);
+    while (module) {
+	FL_SET(module, RMODULE_IS_OVERLAID);
+	c = RCLASS_SUPER(c) = rb_include_class_new(module, RCLASS_SUPER(c));
+	RCLASS_REFINED_CLASS(c) = klass;
+	module = RCLASS_SUPER(module);
+    }
+    rb_hash_aset(cref->nd_refinements, klass, iclass);
+}
+
+void rb_using_module(NODE *cref, VALUE module);
+
+static int
+using_module_i(VALUE module, VALUE val, VALUE arg)
+{
+    NODE *cref = (NODE *) arg;
+
+    rb_using_module(cref, module);
+    return ST_CONTINUE;
+}
+
+static int
+using_refinement(VALUE klass, VALUE module, VALUE arg)
+{
+    NODE *cref = (NODE *) arg;
+
+    rb_using_refinement(cref, klass, module);
+    return ST_CONTINUE;
+}
+
+void
+rb_using_module(NODE *cref, VALUE module)
+{
+    ID id_refinements;
+    VALUE refinements;
+    ID id_using_modules;
+    VALUE using_modules;
+
+    check_class_or_module(module);
+    CONST_ID(id_using_modules, "__using_modules__");
+    using_modules = rb_attr_get(module, id_using_modules);
+    if (!NIL_P(using_modules)) {
+	rb_hash_foreach(using_modules, using_module_i, (VALUE) cref);
+    }
+    CONST_ID(id_refinements, "__refinements__");
+    refinements = rb_attr_get(module, id_refinements);
+    if (NIL_P(refinements)) return;
+    rb_hash_foreach(refinements, using_refinement, (VALUE) cref);
+}
+
+
+static int
+check_cyclic_using(VALUE mod, VALUE _, VALUE search)
+{
+    VALUE using_modules;
+    ID id_using_modules;
+    CONST_ID(id_using_modules, "__using_modules__");
+
+    if (mod == search) {
+	rb_raise(rb_eArgError, "cyclic using detected");
+    }
+
+    using_modules = rb_attr_get(mod, id_using_modules);
+    if (!NIL_P(using_modules)) {
+	rb_hash_foreach(using_modules, check_cyclic_using, search);
+    }
+
+    return ST_CONTINUE;
+}
+
+/*
+ *  call-seq:
+ *     using(module)    -> self
+ *
+ *  Import class refinements from <i>module</i> into the receiver.
+ */
+
+static VALUE
+rb_mod_using(VALUE self, VALUE module)
+{
+    NODE *cref = rb_vm_cref();
+    ID id_using_modules;
+    VALUE using_modules;
+
+    Check_Type(module, T_MODULE);
+    check_cyclic_using(module, 0, self);
+    CONST_ID(id_using_modules, "__using_modules__");
+    using_modules = rb_attr_get(self, id_using_modules);
+    if (NIL_P(using_modules)) {
+	using_modules = hidden_identity_hash_new();
+	rb_ivar_set(self, id_using_modules, using_modules);
+    }
+    rb_hash_aset(using_modules, module, Qtrue);
+    rb_using_module(cref, module);
+    rb_clear_cache();
+    rb_funcall(module, rb_intern("used"), 1, self);
+    return self;
+}
+
+static VALUE
+refinement_module_include(int argc, VALUE *argv, VALUE module)
+{
+    rb_thread_t *th = GET_THREAD();
+    rb_control_frame_t *cfp = th->cfp;
+    rb_control_frame_t *end_cfp = RUBY_VM_END_CONTROL_FRAME(th);
+    VALUE result = rb_mod_include(argc, argv, module);
+    NODE *cref;
+    ID id_refined_class;
+    VALUE klass, c;
+
+    CONST_ID(id_refined_class, "__refined_class__");
+    klass = rb_attr_get(module, id_refined_class);
+    while (RUBY_VM_VALID_CONTROL_FRAME_P(cfp, end_cfp)) {
+	if (RUBY_VM_NORMAL_ISEQ_P(cfp->iseq) &&
+	    (cref = rb_vm_get_cref(cfp->iseq, cfp->ep)) &&
+	    !NIL_P(cref->nd_refinements) &&
+	    !NIL_P(c = rb_hash_lookup(cref->nd_refinements, klass))) {
+	    while (argc--) {
+		VALUE mod = argv[argc];
+		if (rb_class_inherited_p(module, mod)) {
+		    RCLASS_SUPER(c) =
+			rb_include_class_new(mod, RCLASS_SUPER(c));
+		}
+	    }
+	    break;
+	}
+	cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
+    }
+    return result;
+}
+
+/*
+ *  call-seq:
+ *     refine(klass) { block }   -> module
+ *
+ *  Refine <i>klass</i> in the receiver.
+ *
+ *  Returns an overlaid module.
+ */
+
+static VALUE
+rb_mod_refine(VALUE module, VALUE klass)
+{
+    NODE *cref = rb_vm_cref();
+    VALUE mod;
+    ID id_refinements, id_refined_class, id_defined_at;
+    VALUE refinements;
+
+    if (!rb_block_given_p()) {
+        rb_raise(rb_eArgError, "no block given");
+    }
+    check_class_or_module(klass);
+    CONST_ID(id_refinements, "__refinements__");
+    refinements = rb_attr_get(module, id_refinements);
+    if (NIL_P(refinements)) {
+	refinements = hidden_identity_hash_new();
+	rb_ivar_set(module, id_refinements, refinements);
+    }
+    mod = rb_hash_lookup(refinements, klass);
+    if (NIL_P(mod)) {
+	mod = rb_module_new();
+	FL_SET(mod, RMODULE_IS_REFINEMENT);
+	CONST_ID(id_refined_class, "__refined_class__");
+	rb_ivar_set(mod, id_refined_class, klass);
+	CONST_ID(id_defined_at, "__defined_at__");
+	rb_ivar_set(mod, id_defined_at, module);
+	rb_define_singleton_method(mod, "include",
+				   refinement_module_include, -1);
+	rb_using_refinement(cref, klass, mod);
+	rb_hash_aset(refinements, klass, mod);
+    }
+    rb_mod_module_eval(0, NULL, mod);
+    return mod;
+}
+
+static int
+refinements_i(VALUE key, VALUE value, VALUE arg)
+{
+    rb_hash_aset(arg, key, value);
+    return ST_CONTINUE;
+}
+
+/*
+ *  call-seq:
+ *     refinements -> hash
+ *
+ *  Returns refinements in the receiver as a hash table, whose key is a
+ *  refined class and whose value is a refinement module.
+ */
+
+static VALUE
+rb_mod_refinements(VALUE module)
+{
+    ID id_refinements;
+    VALUE refinements, result;
+
+    CONST_ID(id_refinements, "__refinements__");
+    refinements = rb_attr_get(module, id_refinements);
+    if (NIL_P(refinements)) {
+	return rb_hash_new();
+    }
+    result = rb_hash_new();
+    rb_hash_foreach(refinements, refinements_i, result);
+    return result;
 }
 
 void
@@ -1100,13 +1367,17 @@ static VALUE
 rb_obj_extend(int argc, VALUE *argv, VALUE obj)
 {
     int i;
+    ID id_extend_object, id_extended;
+
+    CONST_ID(id_extend_object, "extend_object");
+    CONST_ID(id_extended, "extended");
 
     rb_check_arity(argc, 1, UNLIMITED_ARGUMENTS);
     for (i = 0; i < argc; i++)
 	Check_Type(argv[i], T_MODULE);
     while (argc--) {
-	rb_funcall(argv[argc], rb_intern("extend_object"), 1, obj);
-	rb_funcall(argv[argc], rb_intern("extended"), 1, obj);
+	rb_funcall(argv[argc], id_extend_object, 1, obj);
+	rb_funcall(argv[argc], id_extended, 1, obj);
     }
     return obj;
 }
@@ -1127,11 +1398,29 @@ top_include(int argc, VALUE *argv, VALUE self)
 
     rb_secure(4);
     if (th->top_wrapper) {
-	rb_warning
-	    ("main#include in the wrapped load is effective only in wrapper module");
+	rb_warning("main.include in the wrapped load is effective only in wrapper module");
 	return rb_mod_include(argc, argv, th->top_wrapper);
     }
     return rb_mod_include(argc, argv, rb_cObject);
+}
+
+/*
+ *  call-seq:
+ *     using(module)    -> self
+ *
+ *  Import class refinements from <i>module</i> into the scope where
+ *  <code>using</code> is called.
+ */
+
+static VALUE
+top_using(VALUE self, VALUE module)
+{
+    NODE *cref = rb_vm_cref();
+
+    Check_Type(module, T_MODULE);
+    rb_using_module(cref, module);
+    rb_clear_cache();
+    return self;
 }
 
 static VALUE *
@@ -1279,6 +1568,25 @@ rb_f_callee_name(void)
     }
 }
 
+/*
+ *  call-seq:
+ *     __dir__         -> string
+ *
+ *  Returns the value of <code>File.dirname(__FILE__)</code>
+ *  If <code>__FILE__</code> is <code>nil</code>, it returns <code>nil</code>.
+ *
+ */
+static VALUE
+f_current_dirname(void)
+{
+    VALUE base = rb_current_realfilepath();
+    if (NIL_P(base)) {
+	return Qnil;
+    }
+    base = rb_file_dirname(base);
+    return base;
+}
+
 void
 Init_eval(void)
 {
@@ -1292,12 +1600,16 @@ Init_eval(void)
 
     rb_define_global_function("__method__", rb_f_method_name, 0);
     rb_define_global_function("__callee__", rb_f_callee_name, 0);
+    rb_define_global_function("__dir__", f_current_dirname, 0);
 
     rb_define_private_method(rb_cModule, "append_features", rb_mod_append_features, 1);
     rb_define_private_method(rb_cModule, "extend_object", rb_mod_extend_object, 1);
     rb_define_private_method(rb_cModule, "include", rb_mod_include, -1);
     rb_define_private_method(rb_cModule, "prepend_features", rb_mod_prepend_features, 1);
     rb_define_private_method(rb_cModule, "prepend", rb_mod_prepend, -1);
+    rb_define_private_method(rb_cModule, "using", rb_mod_using, 1);
+    rb_define_private_method(rb_cModule, "refine", rb_mod_refine, 1);
+    rb_define_method(rb_cModule, "refinements", rb_mod_refinements, 0);
 
     rb_undef_method(rb_cClass, "module_function");
 
@@ -1308,6 +1620,7 @@ Init_eval(void)
     rb_define_singleton_method(rb_cModule, "constants", rb_mod_s_constants, -1);
 
     rb_define_singleton_method(rb_vm_top_self(), "include", top_include, -1);
+    rb_define_singleton_method(rb_vm_top_self(), "using", top_using, 1);
 
     rb_define_method(rb_mKernel, "extend", rb_obj_extend, -1);
 

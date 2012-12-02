@@ -4,7 +4,7 @@
 
 #define CACHE_SIZE 0x800
 #define CACHE_MASK 0x7ff
-#define EXPR1(c,m) ((((c)>>3)^(m))&CACHE_MASK)
+#define EXPR1(c,o,m) ((((c)>>3)^((o)>>3)^(m))&CACHE_MASK)
 
 #define NOEX_NOREDEF 0
 #ifndef NOEX_NOREDEF
@@ -21,7 +21,9 @@ struct cache_entry {		/* method hash table. */
     VALUE filled_version;        /* filled state version */
     ID mid;			/* method's id */
     VALUE klass;		/* receiver's class */
+    VALUE refinements;		/* refinements */
     rb_method_entry_t *me;
+    VALUE defined_class;
 };
 
 static struct cache_entry cache[CACHE_SIZE];
@@ -82,6 +84,7 @@ rb_define_notimplement_method_id(VALUE mod, ID id, rb_method_flag_t noex)
 void
 rb_add_method_cfunc(VALUE klass, ID mid, VALUE (*func)(ANYARGS), int argc, rb_method_flag_t noex)
 {
+    if (argc < -2 || 15 < argc) rb_raise(rb_eArgError, "arity out of range: %d for -2..15", argc);
     if (func != rb_f_notimplement) {
 	rb_method_cfunc_t opt;
 	opt.func = func;
@@ -164,6 +167,8 @@ rb_free_method_entry(rb_method_entry_t *me)
 
 static int rb_method_definition_eq(const rb_method_definition_t *d1, const rb_method_definition_t *d2);
 
+void rb_redefine_opt_method(VALUE, ID);
+
 static rb_method_entry_t *
 rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
 		     rb_method_definition_t *def, rb_method_flag_t noex)
@@ -188,18 +193,19 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
 	(mid == rb_intern("initialize") || mid == rb_intern("initialize_copy"))) {
 	noex = NOEX_PRIVATE | noex;
     }
-    else if (FL_TEST(klass, FL_SINGLETON) &&
-	     type == VM_METHOD_TYPE_CFUNC &&
-	     mid == rb_intern("allocate")) {
-	rb_warn("defining %s.allocate is deprecated; use rb_define_alloc_func()",
-		rb_class2name(rb_ivar_get(klass, attached)));
-	mid = ID_ALLOCATOR;
-    }
 
     rb_check_frozen(klass);
 #if NOEX_NOREDEF
     rklass = klass;
 #endif
+    if (FL_TEST(klass, RMODULE_IS_REFINEMENT)) {
+	ID id_refined_class;
+	VALUE refined_class;
+
+	CONST_ID(id_refined_class, "__refined_class__");
+	refined_class = rb_ivar_get(klass, id_refined_class);
+	rb_redefine_opt_method(refined_class, mid);
+    }
     klass = RCLASS_ORIGIN(klass);
     mtbl = RCLASS_M_TBL(klass);
 
@@ -287,9 +293,44 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
 static void
 method_added(VALUE klass, ID mid)
 {
-    if (mid != ID_ALLOCATOR && ruby_running) {
+    if (ruby_running) {
 	CALL_METHOD_HOOK(klass, added, mid);
     }
+}
+
+static VALUE
+(*call_cfunc_invoker_func(int argc))(VALUE (*func)(ANYARGS), VALUE recv, int argc, const VALUE *)
+{
+    switch (argc) {
+      case -2: return call_cfunc_m2;
+      case -1: return call_cfunc_m1;
+      case 0: return call_cfunc_0;
+      case 1: return call_cfunc_1;
+      case 2: return call_cfunc_2;
+      case 3: return call_cfunc_3;
+      case 4: return call_cfunc_4;
+      case 5: return call_cfunc_5;
+      case 6: return call_cfunc_6;
+      case 7: return call_cfunc_7;
+      case 8: return call_cfunc_8;
+      case 9: return call_cfunc_9;
+      case 10: return call_cfunc_10;
+      case 11: return call_cfunc_11;
+      case 12: return call_cfunc_12;
+      case 13: return call_cfunc_13;
+      case 14: return call_cfunc_14;
+      case 15: return call_cfunc_15;
+      default:
+	rb_bug("call_cfunc_func: unsupported length: %d", argc);
+    }
+}
+
+static void
+setup_method_cfunc_struct(rb_method_cfunc_t *cfunc, VALUE (*func)(), int argc)
+{
+    cfunc->func = func;
+    cfunc->argc = argc;
+    cfunc->invoker = call_cfunc_invoker_func(argc);
 }
 
 rb_method_entry_t *
@@ -309,7 +350,11 @@ rb_add_method(VALUE klass, ID mid, rb_method_type_t type, void *opts, rb_method_
 	def->body.iseq = (rb_iseq_t *)opts;
 	break;
       case VM_METHOD_TYPE_CFUNC:
-	def->body.cfunc = *(rb_method_cfunc_t *)opts;
+      case VM_METHOD_TYPE_CFUNC_FRAMELESS:
+	{
+	    rb_method_cfunc_t *cfunc = (rb_method_cfunc_t *)opts;
+	    setup_method_cfunc_struct(&def->body.cfunc, cfunc->func, cfunc->argc);
+	}
 	break;
       case VM_METHOD_TYPE_ATTRSET:
       case VM_METHOD_TYPE_IVAR:
@@ -326,8 +371,7 @@ rb_add_method(VALUE klass, ID mid, rb_method_type_t type, void *opts, rb_method_
 	def->body.proc = (VALUE)opts;
 	break;
       case VM_METHOD_TYPE_NOTIMPLEMENTED:
-	def->body.cfunc.func = rb_f_notimplement;
-	def->body.cfunc.argc = -1;
+	setup_method_cfunc_struct(&def->body.cfunc, rb_f_notimplement, -1);
 	break;
       case VM_METHOD_TYPE_OPTIMIZED:
 	def->body.optimize_type = (enum method_optimized_type)opts;
@@ -353,50 +397,114 @@ rb_method_entry_set(VALUE klass, ID mid, const rb_method_entry_t *me, rb_method_
     return newme;
 }
 
+#define UNDEF_ALLOC_FUNC ((rb_alloc_func_t)-1)
+
 void
 rb_define_alloc_func(VALUE klass, VALUE (*func)(VALUE))
 {
     Check_Type(klass, T_CLASS);
-    rb_add_method_cfunc(rb_singleton_class(klass), ID_ALLOCATOR,
-			func, 0, NOEX_PRIVATE);
+    RCLASS_EXT(klass)->allocator = func;
 }
 
 void
 rb_undef_alloc_func(VALUE klass)
 {
-    Check_Type(klass, T_CLASS);
-    rb_add_method(rb_singleton_class(klass), ID_ALLOCATOR, VM_METHOD_TYPE_UNDEF, 0, NOEX_UNDEF);
+    rb_define_alloc_func(klass, UNDEF_ALLOC_FUNC);
 }
 
 rb_alloc_func_t
 rb_get_alloc_func(VALUE klass)
 {
-    rb_method_entry_t *me;
     Check_Type(klass, T_CLASS);
-    me = rb_method_entry(CLASS_OF(klass), ID_ALLOCATOR);
 
-    if (me && me->def && me->def->type == VM_METHOD_TYPE_CFUNC) {
-	return (rb_alloc_func_t)me->def->body.cfunc.func;
+    for (; klass; klass = RCLASS_SUPER(klass)) {
+	rb_alloc_func_t allocator = RCLASS_EXT(klass)->allocator;
+	if (allocator == UNDEF_ALLOC_FUNC) break;
+	if (allocator) return allocator;
     }
-    else {
-	return 0;
-    }
+    return 0;
 }
 
-static rb_method_entry_t*
-search_method(VALUE klass, ID id)
+static VALUE
+copy_refinement_iclass(VALUE iclass, VALUE superclass)
+{
+    VALUE result, c;
+
+    Check_Type(iclass, T_ICLASS);
+    c = result = rb_include_class_new(RBASIC(iclass)->klass, superclass);
+    RCLASS_REFINED_CLASS(c) = RCLASS_REFINED_CLASS(iclass);
+    iclass = RCLASS_SUPER(iclass);
+    while (iclass && BUILTIN_TYPE(iclass) == T_ICLASS) {
+	c = RCLASS_SUPER(c) = rb_include_class_new(RBASIC(iclass)->klass,
+						   RCLASS_SUPER(c));
+	RCLASS_REFINED_CLASS(c) = RCLASS_REFINED_CLASS(iclass);
+	iclass = RCLASS_SUPER(iclass);
+    }
+    return result;
+}
+
+static inline int
+lookup_method_table(VALUE klass, ID id, st_data_t *body)
+{
+    st_table *m_tbl = RCLASS_M_TBL(klass);
+    if (!m_tbl) {
+	m_tbl = RCLASS_M_TBL(RCLASS_ORIGIN(RBASIC(klass)->klass));
+    }
+    return st_lookup(m_tbl, id, body);
+}
+
+static inline rb_method_entry_t*
+search_method_with_refinements(VALUE klass, ID id, VALUE refinements,
+			       VALUE *defined_class_ptr)
+{
+    st_data_t body;
+    VALUE iclass, skipped_class = Qnil;
+
+    for (body = 0; klass; klass = RCLASS_SUPER(klass)) {
+	if (klass != skipped_class) {
+	    iclass = rb_hash_lookup(refinements, klass);
+	    if (NIL_P(iclass) && BUILTIN_TYPE(klass) == T_ICLASS) {
+		iclass = rb_hash_lookup(refinements, RBASIC(klass)->klass);
+		if (!NIL_P(iclass))
+		    iclass = copy_refinement_iclass(iclass, klass);
+	    }
+	    if (!NIL_P(iclass)) {
+		skipped_class = klass;
+		klass = iclass;
+	    }
+	}
+	if (lookup_method_table(klass, id, &body)) break;
+    }
+
+    if (defined_class_ptr)
+	*defined_class_ptr = klass;
+    return (rb_method_entry_t *)body;
+}
+
+static inline rb_method_entry_t*
+search_method_without_refinements(VALUE klass, ID id, VALUE *defined_class_ptr)
 {
     st_data_t body;
 
     for (body = 0; klass; klass = RCLASS_SUPER(klass)) {
-	st_table *m_tbl = RCLASS_M_TBL(klass);
-	if (!m_tbl) {
-	    m_tbl = RCLASS_M_TBL(RCLASS_ORIGIN(RBASIC(klass)->klass));
-	}
-	if (st_lookup(m_tbl, id, &body)) break;
+	if (lookup_method_table(klass, id, &body)) break;
     }
 
+    if (defined_class_ptr)
+	*defined_class_ptr = klass;
     return (rb_method_entry_t *)body;
+}
+
+static rb_method_entry_t*
+search_method(VALUE klass, ID id, VALUE refinements, VALUE *defined_class_ptr)
+{
+    if (NIL_P(refinements)) {
+	return search_method_without_refinements(klass, id, defined_class_ptr);
+    }
+    else {
+	return search_method_with_refinements(klass, id, refinements,
+					      defined_class_ptr);
+    }
 }
 
 /*
@@ -406,15 +514,20 @@ search_method(VALUE klass, ID id)
  * rb_method_entry() simply.
  */
 rb_method_entry_t *
-rb_method_entry_get_without_cache(VALUE klass, ID id)
+rb_method_entry_get_without_cache(VALUE klass, VALUE refinements, ID id,
+				  VALUE *defined_class_ptr)
 {
-    rb_method_entry_t *me = search_method(klass, id);
+    VALUE defined_class;
+    rb_method_entry_t *me = search_method(klass, id, refinements,
+					  &defined_class);
 
     if (ruby_running) {
 	struct cache_entry *ent;
-	ent = cache + EXPR1(klass, id);
+	ent = cache + EXPR1(klass, refinements, id);
 	ent->filled_version = GET_VM_STATE_VERSION();
 	ent->klass = klass;
+	ent->refinements = refinements;
+	ent->defined_class = defined_class;
 
 	if (UNDEFINED_METHOD_ENTRY_P(me)) {
 	    ent->mid = id;
@@ -427,21 +540,43 @@ rb_method_entry_get_without_cache(VALUE klass, ID id)
 	}
     }
 
+    if (defined_class_ptr)
+	*defined_class_ptr = defined_class;
     return me;
 }
 
 rb_method_entry_t *
-rb_method_entry(VALUE klass, ID id)
+rb_method_entry_get_with_refinements(VALUE refinements, VALUE klass, ID id,
+				     VALUE *defined_class_ptr)
 {
+#if OPT_GLOBAL_METHOD_CACHE
     struct cache_entry *ent;
 
-    ent = cache + EXPR1(klass, id);
+    ent = cache + EXPR1(klass, refinements, id);
     if (ent->filled_version == GET_VM_STATE_VERSION() &&
-	ent->mid == id && ent->klass == klass) {
+	ent->mid == id && ent->klass == klass &&
+       	ent->refinements == refinements) {
+	if (defined_class_ptr)
+	    *defined_class_ptr = ent->defined_class;
 	return ent->me;
     }
+#endif
 
-    return rb_method_entry_get_without_cache(klass, id);
+    return rb_method_entry_get_without_cache(klass, refinements, id,
+					     defined_class_ptr);
+}
+
+rb_method_entry_t *
+rb_method_entry(VALUE klass, ID id, VALUE *defined_class_ptr)
+{
+    NODE *cref = rb_vm_cref();
+    VALUE refinements = Qnil;
+
+    if (cref && !NIL_P(cref->nd_refinements)) {
+	refinements = cref->nd_refinements;
+    }
+    return rb_method_entry_get_with_refinements(refinements, klass, id,
+					       	defined_class_ptr);
 }
 
 static void
@@ -534,14 +669,15 @@ static void
 rb_export_method(VALUE klass, ID name, rb_method_flag_t noex)
 {
     rb_method_entry_t *me;
+    VALUE defined_class;
 
     if (klass == rb_cObject) {
 	rb_secure(4);
     }
 
-    me = search_method(klass, name);
+    me = search_method(klass, name, Qnil, &defined_class);
     if (!me && RB_TYPE_P(klass, T_MODULE)) {
-	me = search_method(rb_cObject, name);
+	me = search_method(rb_cObject, name, Qnil, &defined_class);
     }
 
     if (UNDEFINED_METHOD_ENTRY_P(me)) {
@@ -551,7 +687,7 @@ rb_export_method(VALUE klass, ID name, rb_method_flag_t noex)
     if (me->flag != noex) {
 	rb_vm_check_redefinition_opt_method(me, klass);
 
-	if (klass == me->klass) {
+	if (klass == defined_class) {
 	    me->flag = noex;
 	}
 	else {
@@ -563,7 +699,7 @@ rb_export_method(VALUE klass, ID name, rb_method_flag_t noex)
 int
 rb_method_boundp(VALUE klass, ID id, int ex)
 {
-    rb_method_entry_t *me = rb_method_entry(klass, id);
+    rb_method_entry_t *me = rb_method_entry(klass, id, 0);
 
     if (me != 0) {
 	if ((ex & ~NOEX_RESPONDS) &&
@@ -629,6 +765,9 @@ void
 rb_undef(VALUE klass, ID id)
 {
     rb_method_entry_t *me;
+    NODE *cref = rb_vm_cref();
+    VALUE refinements = Qnil;
+    void rb_using_refinement(NODE *cref, VALUE klass, VALUE module);
 
     if (NIL_P(klass)) {
 	rb_raise(rb_eTypeError, "no class to undef method");
@@ -644,7 +783,10 @@ rb_undef(VALUE klass, ID id)
 	rb_warn("undefining `%s' may cause serious problems", rb_id2name(id));
     }
 
-    me = search_method(klass, id);
+    if (cref && !NIL_P(cref->nd_refinements)) {
+	refinements = cref->nd_refinements;
+    }
+    me = search_method(klass, id, refinements, 0);
 
     if (UNDEFINED_METHOD_ENTRY_P(me)) {
 	const char *s0 = " class";
@@ -653,9 +795,7 @@ rb_undef(VALUE klass, ID id)
 	if (FL_TEST(c, FL_SINGLETON)) {
 	    VALUE obj = rb_ivar_get(klass, attached);
 
-	    switch (TYPE(obj)) {
-	      case T_MODULE:
-	      case T_CLASS:
+	    if (RB_TYPE_P(obj, T_MODULE) || RB_TYPE_P(obj, T_CLASS)) {
 		c = obj;
 		s0 = "";
 	    }
@@ -667,6 +807,11 @@ rb_undef(VALUE klass, ID id)
 		      rb_id2name(id), s0, rb_class2name(c));
     }
 
+    if (!RTEST(rb_class_inherited_p(klass, me->klass))) {
+	VALUE mod = rb_module_new();
+	rb_using_refinement(cref, klass, mod);
+	klass = mod;
+    }
     rb_add_method(klass, id, VM_METHOD_TYPE_UNDEF, 0, NOEX_PUBLIC);
 
     CALL_METHOD_HOOK(klass, undefined, id);
@@ -775,7 +920,7 @@ check_definition(VALUE mod, VALUE mid, rb_method_flag_t noex)
     const rb_method_entry_t *me;
     ID id = rb_check_id(&mid);
     if (!id) return Qfalse;
-    me = rb_method_entry(mod, id);
+    me = rb_method_entry(mod, id, 0);
     if (me) {
 	if (VISI_CHECK(me->flag, noex))
 	    return Qtrue;
@@ -971,11 +1116,12 @@ rb_alias(VALUE klass, ID name, ID def)
     }
 
   again:
-    orig_me = search_method(klass, def);
+    orig_me = search_method(klass, def, Qnil, 0);
 
     if (UNDEFINED_METHOD_ENTRY_P(orig_me)) {
 	if ((!RB_TYPE_P(klass, T_MODULE)) ||
-	    (orig_me = search_method(rb_cObject, def), UNDEFINED_METHOD_ENTRY_P(orig_me))) {
+	    (orig_me = search_method(rb_cObject, def, Qnil, 0),
+	     UNDEFINED_METHOD_ENTRY_P(orig_me))) {
 	    rb_print_undef(klass, def, 0);
 	}
     }
@@ -1250,9 +1396,9 @@ rb_mod_modfunc(int argc, VALUE *argv, VALUE module)
 
 	id = rb_to_id(argv[i]);
 	for (;;) {
-	    me = search_method(m, id);
+	    me = search_method(m, id, Qnil, 0);
 	    if (me == 0) {
-		me = search_method(rb_cObject, id);
+		me = search_method(rb_cObject, id, Qnil, 0);
 	    }
 	    if (UNDEFINED_METHOD_ENTRY_P(me)) {
 		rb_print_undef(module, id, 0);
@@ -1272,7 +1418,7 @@ rb_mod_modfunc(int argc, VALUE *argv, VALUE module)
 int
 rb_method_basic_definition_p(VALUE klass, ID id)
 {
-    const rb_method_entry_t *me = rb_method_entry(klass, id);
+    const rb_method_entry_t *me = rb_method_entry(klass, id, 0);
     if (me && (me->flag & NOEX_BASIC))
 	return 1;
     return 0;
@@ -1366,6 +1512,21 @@ obj_respond_to_missing(VALUE obj, VALUE mid, VALUE priv)
 }
 
 void
+rb_redefine_opt_method(VALUE klass, ID mid)
+{
+    st_data_t data;
+    rb_method_entry_t *me = 0;
+    VALUE origin = RCLASS_ORIGIN(klass);
+
+    if (!st_lookup(RCLASS_M_TBL(origin), mid, &data) ||
+	!(me = (rb_method_entry_t *)data) ||
+	(!me->def || me->def->type == VM_METHOD_TYPE_UNDEF)) {
+	return;
+    }
+    rb_vm_check_redefinition_opt_method(me, origin);
+}
+
+void
 Init_eval_method(void)
 {
 #undef rb_intern
@@ -1404,7 +1565,8 @@ Init_eval_method(void)
 
     {
 #define REPLICATE_METHOD(klass, id, noex) \
-	rb_method_entry_set((klass), (id), rb_method_entry((klass), (id)), \
+	rb_method_entry_set((klass), (id), \
+			    rb_method_entry((klass), (id), 0), \
 			    (rb_method_flag_t)(noex | NOEX_BASIC | NOEX_NOREDEF))
 	REPLICATE_METHOD(rb_eException, idMethodMissing, NOEX_PRIVATE);
 	REPLICATE_METHOD(rb_eException, idRespond_to, NOEX_PUBLIC);

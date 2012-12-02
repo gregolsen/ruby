@@ -128,7 +128,7 @@ File.foreach "config.status" do |line|
         val.sub!(/universal/, %q[#{arch && universal[/(?:\A|\s)#{Regexp.quote(arch)}=(\S+)/, 1] || '\&'}])
       end
     end
-    v = "  CONFIG[\"#{name}\"] #{win32 && vars[name] ? '<< "\n"' : '='} #{val}\n"
+    v = "  CONFIG[\"#{name}\"] #{win32 && vars[name] ? '<< "\n" +' : '='} #{val}\n"
     vars[name] = true
     if fast[name]
       v_fast << v
@@ -248,6 +248,7 @@ print <<EOS
     )
   end
 end
+autoload :Config, "rbconfig/obsolete.rb" # compatibility for ruby-1.8.4 and older.
 CROSS_COMPILING = nil unless defined? CROSS_COMPILING
 EOS
 

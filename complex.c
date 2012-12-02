@@ -1,5 +1,5 @@
 /*
-  complex.c: Coded by Tadayoshi Funaba 2008-2011
+  complex.c: Coded by Tadayoshi Funaba 2008-2012
 
   This implementation is based on Keiju Ishitsuka's Complex library
   which is written in ruby.
@@ -313,8 +313,7 @@ k_complex_p(VALUE x)
 inline static VALUE
 nucomp_s_new_internal(VALUE klass, VALUE real, VALUE imag)
 {
-    NEWOBJ(obj, struct RComplex);
-    OBJSETUP(obj, klass, T_COMPLEX);
+    NEWOBJ_OF(obj, struct RComplex, klass, T_COMPLEX);
 
     obj->real = real;
     obj->imag = imag;
@@ -440,6 +439,8 @@ nucomp_s_canonicalize_internal(VALUE klass, VALUE real, VALUE imag)
  *    Complex.rectangular(real[, imag])  ->  complex
  *
  * Returns a complex object which denotes the given rectangular form.
+ *
+ *    Complex.rectangular(1, 2)  #=> (1+2i)
  */
 static VALUE
 nucomp_s_new(int argc, VALUE *argv, VALUE klass)
@@ -479,6 +480,9 @@ f_complex_new2(VALUE klass, VALUE x, VALUE y)
  *    Complex(x[, y])  ->  numeric
  *
  * Returns x+i*y;
+ *
+ *    Complex(1, 2)    #=> (1+2i)
+ *    Complex('1+2i')  #=> (1+2i)
  */
 static VALUE
 nucomp_f_complex(int argc, VALUE *argv, VALUE klass)
@@ -588,10 +592,10 @@ f_complex_polar(VALUE klass, VALUE x, VALUE y)
  *
  * Returns a complex object which denotes the given polar form.
  *
- *   Complex.polar(3, 0)           #=> (3.0+0.0i)
- *   Complex.polar(3, Math::PI/2)  #=> (1.836909530733566e-16+3.0i)
- *   Complex.polar(3, Math::PI)    #=> (-3.0+3.673819061467132e-16i)
- *   Complex.polar(3, -Math::PI/2) #=> (1.836909530733566e-16-3.0i)
+ *    Complex.polar(3, 0)            #=> (3.0+0.0i)
+ *    Complex.polar(3, Math::PI/2)   #=> (1.836909530733566e-16+3.0i)
+ *    Complex.polar(3, Math::PI)     #=> (-3.0+3.673819061467132e-16i)
+ *    Complex.polar(3, -Math::PI/2)  #=> (1.836909530733566e-16-3.0i)
  */
 static VALUE
 nucomp_s_polar(int argc, VALUE *argv, VALUE klass)
@@ -616,6 +620,9 @@ nucomp_s_polar(int argc, VALUE *argv, VALUE klass)
  *    cmp.real  ->  real
  *
  * Returns the real part.
+ *
+ *    Complex(7).real      #=> 7
+ *    Complex(9, -4).real  #=> 9
  */
 static VALUE
 nucomp_real(VALUE self)
@@ -630,6 +637,9 @@ nucomp_real(VALUE self)
  *    cmp.imaginary  ->  real
  *
  * Returns the imaginary part.
+ *
+ *    Complex(7).imaginary      #=> 0
+ *    Complex(9, -4).imaginary  #=> -4
  */
 static VALUE
 nucomp_imag(VALUE self)
@@ -643,6 +653,8 @@ nucomp_imag(VALUE self)
  *    -cmp  ->  complex
  *
  * Returns negation of the value.
+ *
+ *    -Complex(1, 2)  #=> (-1-2i)
  */
 static VALUE
 nucomp_negate(VALUE self)
@@ -680,6 +692,12 @@ f_addsub(VALUE self, VALUE other,
  *    cmp + numeric  ->  complex
  *
  * Performs addition.
+ *
+ *    Complex(2, 3)  + Complex(2, 3)   #=> (4+6i)
+ *    Complex(900)   + Complex(1)      #=> (901+0i)
+ *    Complex(-2, 9) + Complex(-9, 2)  #=> (-11+11i)
+ *    Complex(9, 8)  + 4               #=> (13+8i)
+ *    Complex(20, 9) + 9.8             #=> (29.8+9i)
  */
 static VALUE
 nucomp_add(VALUE self, VALUE other)
@@ -692,6 +710,12 @@ nucomp_add(VALUE self, VALUE other)
  *    cmp - numeric  ->  complex
  *
  * Performs subtraction.
+ *
+ *    Complex(2, 3)  - Complex(2, 3)   #=> (0+0i)
+ *    Complex(900)   - Complex(1)      #=> (899+0i)
+ *    Complex(-2, 9) - Complex(-9, 2)  #=> (7+7i)
+ *    Complex(9, 8)  - 4               #=> (5+8i)
+ *    Complex(20, 9) - 9.8             #=> (10.2+9i)
  */
 static VALUE
 nucomp_sub(VALUE self, VALUE other)
@@ -704,6 +728,12 @@ nucomp_sub(VALUE self, VALUE other)
  *    cmp * numeric  ->  complex
  *
  * Performs multiplication.
+ *
+ *    Complex(2, 3)  * Complex(2, 3)   #=> (-5+12i)
+ *    Complex(900)   * Complex(1)      #=> (900+0i)
+ *    Complex(-2, 9) * Complex(-9, 2)  #=> (0-85i)
+ *    Complex(9, 8)  * 4               #=> (36+32i)
+ *    Complex(20, 9) * 9.8             #=> (196.0+88.2i)
  */
 static VALUE
 nucomp_mul(VALUE self, VALUE other)
@@ -791,10 +821,11 @@ f_divide(VALUE self, VALUE other,
  *
  * Performs division.
  *
- * For example:
- *
- *     Complex(10.0) / 3  #=> (3.3333333333333335+(0/1)*i)
- *     Complex(10)   / 3  #=> ((10/3)+(0/1)*i)  # not (3+0i)
+ *    Complex(2, 3)  / Complex(2, 3)   #=> ((1/1)+(0/1)*i)
+ *    Complex(900)   / Complex(1)      #=> ((900/1)+(0/1)*i)
+ *    Complex(-2, 9) / Complex(-9, 2)  #=> ((36/85)-(77/85)*i)
+ *    Complex(9, 8)  / 4               #=> ((9/4)+(2/1)*i)
+ *    Complex(20, 9) / 9.8             #=> (2.0408163265306123+0.9183673469387754i)
  */
 static VALUE
 nucomp_div(VALUE self, VALUE other)
@@ -810,9 +841,7 @@ nucomp_div(VALUE self, VALUE other)
  *
  * Performs division as each part is a float, never returns a float.
  *
- * For example:
- *
- *     Complex(11,22).fdiv(3)  #=> (3.6666666666666665+7.333333333333333i)
+ *    Complex(11, 22).fdiv(3)  #=> (3.6666666666666665+7.333333333333333i)
  */
 static VALUE
 nucomp_fdiv(VALUE self, VALUE other)
@@ -832,10 +861,8 @@ f_reciprocal(VALUE x)
  *
  * Performs exponentiation.
  *
- * For example:
- *
- *     Complex('i') ** 2             #=> (-1+0i)
- *     Complex(-8) ** Rational(1,3)  #=> (1.0000000000000002+1.7320508075688772i)
+ *    Complex('i') ** 2              #=> (-1+0i)
+ *    Complex(-8) ** Rational(1, 3)  #=> (1.0000000000000002+1.7320508075688772i)
  */
 static VALUE
 nucomp_expt(VALUE self, VALUE other)
@@ -921,6 +948,12 @@ nucomp_expt(VALUE self, VALUE other)
  *    cmp == object  ->  true or false
  *
  * Returns true if cmp equals object numerically.
+ *
+ *    Complex(2, 3)  == Complex(2, 3)   #=> true
+ *    Complex(5)     == 5               #=> true
+ *    Complex(0)     == 0.0             #=> true
+ *    Complex('1/3') == 0.33            #=> false
+ *    Complex('1/2') == '1/2'           #=> false
  */
 static VALUE
 nucomp_eqeq_p(VALUE self, VALUE other)
@@ -959,6 +992,9 @@ nucomp_coerce(VALUE self, VALUE other)
  *    cmp.magnitude  ->  real
  *
  * Returns the absolute part of its polar form.
+ *
+ *    Complex(-1).abs         #=> 1
+ *    Complex(3.0, -4.0).abs  #=> 5.0
  */
 static VALUE
 nucomp_abs(VALUE self)
@@ -985,6 +1021,9 @@ nucomp_abs(VALUE self)
  *    cmp.abs2  ->  real
  *
  * Returns square of the absolute value.
+ *
+ *    Complex(-1).abs2         #=> 1
+ *    Complex(3.0, -4.0).abs2  #=> 25.0
  */
 static VALUE
 nucomp_abs2(VALUE self)
@@ -1002,8 +1041,7 @@ nucomp_abs2(VALUE self)
  *
  * Returns the angle part of its polar form.
  *
- *   Complex.polar(3, Math::PI/2).arg #=> 1.5707963267948966
- *
+ *    Complex.polar(3, Math::PI/2).arg  #=> 1.5707963267948966
  */
 static VALUE
 nucomp_arg(VALUE self)
@@ -1018,6 +1056,8 @@ nucomp_arg(VALUE self)
  *    cmp.rectangular  ->  array
  *
  * Returns an array; [cmp.real, cmp.imag].
+ *
+ *    Complex(1, 2).rectangular  #=> [1, 2]
  */
 static VALUE
 nucomp_rect(VALUE self)
@@ -1031,6 +1071,8 @@ nucomp_rect(VALUE self)
  *    cmp.polar  ->  array
  *
  * Returns an array; [cmp.abs, cmp.arg].
+ *
+ *    Complex(1, 2).polar  #=> [2.23606797749979, 1.1071487177940904]
  */
 static VALUE
 nucomp_polar(VALUE self)
@@ -1044,6 +1086,8 @@ nucomp_polar(VALUE self)
  *    cmp.conjugate  ->  complex
  *
  * Returns the complex conjugate.
+ *
+ *    Complex(1, 2).conjugate  #=> (1-2i)
  */
 static VALUE
 nucomp_conj(VALUE self)
@@ -1110,8 +1154,6 @@ nucomp_denominator(VALUE self)
  *    cmp.numerator  ->  numeric
  *
  * Returns the numerator.
- *
- * For example:
  *
  *        1   2       3+4i  <-  numerator
  *        - + -i  ->  ----
@@ -1218,6 +1260,12 @@ f_format(VALUE self, VALUE (*func)(VALUE))
  *    cmp.to_s  ->  string
  *
  * Returns the value as a string.
+ *
+ *    Complex(2).to_s                       #=> "2+0i"
+ *    Complex('-8/6').to_s                  #=> "-4/3+0i"
+ *    Complex('1/2i').to_s                  #=> "0+1/2i"
+ *    Complex(0, Float::INFINITY).to_s      #=> "0+Infinity*i"
+ *    Complex(Float::NAN, Float::NAN).to_s  #=> "NaN+NaN*i"
  */
 static VALUE
 nucomp_to_s(VALUE self)
@@ -1230,6 +1278,12 @@ nucomp_to_s(VALUE self)
  *    cmp.inspect  ->  string
  *
  * Returns the value as a string for inspection.
+ *
+ *    Complex(2).inspect                       #=> "(2+0i)"
+ *    Complex('-8/6').inspect                  #=> "((-4/3)+0i)"
+ *    Complex('1/2i').inspect                  #=> "(0+(1/2)*i)"
+ *    Complex(0, Float::INFINITY).inspect      #=> "(0+Infinity*i)"
+ *    Complex(Float::NAN, Float::NAN).inspect  #=> "(NaN+NaN*i)"
  */
 static VALUE
 nucomp_inspect(VALUE self)
@@ -1320,7 +1374,12 @@ rb_Complex(VALUE x, VALUE y)
  * call-seq:
  *    cmp.to_i  ->  integer
  *
- * Returns the value as an integer if possible.
+ * Returns the value as an integer if possible (the imaginary part
+ * should be exactly zero).
+ *
+ *    Complex(1, 0).to_i    #=> 1
+ *    Complex(1, 0.0).to_i  # RangeError
+ *    Complex(1, 2).to_i    # RangeError
  */
 static VALUE
 nucomp_to_i(VALUE self)
@@ -1339,7 +1398,12 @@ nucomp_to_i(VALUE self)
  * call-seq:
  *    cmp.to_f  ->  float
  *
- * Returns the value as a float if possible.
+ * Returns the value as a float if possible (the imaginary part should
+ * be exactly zero).
+ *
+ *    Complex(1, 0).to_f    #=> 1.0
+ *    Complex(1, 0.0).to_f  # RangeError
+ *    Complex(1, 2).to_f    # RangeError
  */
 static VALUE
 nucomp_to_f(VALUE self)
@@ -1358,8 +1422,14 @@ nucomp_to_f(VALUE self)
  * call-seq:
  *    cmp.to_r  ->  rational
  *
- * If the imaginary part is exactly 0, returns the real part as a Rational,
- * otherwise a RangeError is raised.
+ * Returns the value as a rational if possible (the imaginary part
+ * should be exactly zero).
+ *
+ *    Complex(1, 0).to_r    #=> (1/1)
+ *    Complex(1, 0.0).to_r  # RangeError
+ *    Complex(1, 2).to_r    # RangeError
+ *
+ * See rationalize.
  */
 static VALUE
 nucomp_to_r(VALUE self)
@@ -1378,8 +1448,14 @@ nucomp_to_r(VALUE self)
  * call-seq:
  *    cmp.rationalize([eps])  ->  rational
  *
- * If the imaginary part is exactly 0, returns the real part as a Rational,
- * otherwise a RangeError is raised.
+ * Returns the value as a rational if possible (the imaginary part
+ * should be exactly zero).
+ *
+ *    Complex(1.0/3, 0).rationalize  #=> (1/3)
+ *    Complex(1, 0.0).rationalize    # RangeError
+ *    Complex(1, 2).rationalize      # RangeError
+ *
+ * See to_r.
  */
 static VALUE
 nucomp_rationalize(int argc, VALUE *argv, VALUE self)
@@ -1394,6 +1470,21 @@ nucomp_rationalize(int argc, VALUE *argv, VALUE self)
                 StringValuePtr(s));
     }
     return rb_funcall2(dat->real, rb_intern("rationalize"), argc, argv);
+}
+
+/*
+ * call-seq:
+ *    complex.to_c  ->  self
+ *
+ * Returns self.
+ *
+ *    Complex(2).to_c      #=> (2+0i)
+ *    Complex(-8, 6).to_c  #=> (-8+6i)
+ */
+static VALUE
+nucomp_to_c(VALUE self)
+{
+    return self;
 }
 
 /*
@@ -1420,159 +1511,298 @@ numeric_to_c(VALUE self)
     return rb_complex_new1(self);
 }
 
-static VALUE comp_pat0, comp_pat1, comp_pat2, a_slash, a_dot_and_an_e,
-    null_string, underscores_pat, an_underscore;
+#include <ctype.h>
 
-#define WS "\\s*"
-#define DIGITS "(?:[0-9](?:_[0-9]|[0-9])*)"
-#define NUMERATOR "(?:" DIGITS "?\\.)?" DIGITS "(?:[eE][-+]?" DIGITS ")?"
-#define DENOMINATOR DIGITS
-#define NUMBER "[-+]?" NUMERATOR "(?:\\/" DENOMINATOR ")?"
-#define NUMBERNOS NUMERATOR "(?:\\/" DENOMINATOR ")?"
-#define PATTERN0 "\\A" WS "(" NUMBER ")@(" NUMBER ")" WS
-#define PATTERN1 "\\A" WS "([-+])?(" NUMBER ")?[iIjJ]" WS
-#define PATTERN2 "\\A" WS "(" NUMBER ")(([-+])(" NUMBERNOS ")?[iIjJ])?" WS
-
-static void
-make_patterns(void)
+inline static int
+issign(int c)
 {
-    static const char comp_pat0_source[] = PATTERN0;
-    static const char comp_pat1_source[] = PATTERN1;
-    static const char comp_pat2_source[] = PATTERN2;
-    static const char underscores_pat_source[] = "_+";
-
-    if (comp_pat0) return;
-
-    comp_pat0 = rb_reg_new(comp_pat0_source, sizeof comp_pat0_source - 1, 0);
-    rb_gc_register_mark_object(comp_pat0);
-
-    comp_pat1 = rb_reg_new(comp_pat1_source, sizeof comp_pat1_source - 1, 0);
-    rb_gc_register_mark_object(comp_pat1);
-
-    comp_pat2 = rb_reg_new(comp_pat2_source, sizeof comp_pat2_source - 1, 0);
-    rb_gc_register_mark_object(comp_pat2);
-
-    a_slash = rb_usascii_str_new2("/");
-    rb_gc_register_mark_object(a_slash);
-
-    a_dot_and_an_e = rb_usascii_str_new2(".eE");
-    rb_gc_register_mark_object(a_dot_and_an_e);
-
-    null_string = rb_usascii_str_new2("");
-    rb_gc_register_mark_object(null_string);
-
-    underscores_pat = rb_reg_new(underscores_pat_source,
-				 sizeof underscores_pat_source - 1, 0);
-    rb_gc_register_mark_object(underscores_pat);
-
-    an_underscore = rb_usascii_str_new2("_");
-    rb_gc_register_mark_object(an_underscore);
+    return (c == '-' || c == '+');
 }
 
-#define id_match rb_intern("match")
-#define f_match(x,y) rb_funcall((x), id_match, 1, (y))
+static int
+read_sign(const char **s,
+	  char **b)
+{
+    int sign = '?';
 
-#define id_gsub_bang rb_intern("gsub!")
-#define f_gsub_bang(x,y,z) rb_funcall((x), id_gsub_bang, 2, (y), (z))
+    if (issign(**s)) {
+	sign = **b = **s;
+	(*s)++;
+	(*b)++;
+    }
+    return sign;
+}
+
+inline static int
+isdecimal(int c)
+{
+    return isdigit((unsigned char)c);
+}
+
+static int
+read_digits(const char **s, int strict,
+	    char **b)
+{
+    int us = 1;
+
+    if (!isdecimal(**s))
+	return 0;
+
+    while (isdecimal(**s) || **s == '_') {
+	if (**s == '_') {
+	    if (strict) {
+		if (us)
+		    return 0;
+	    }
+	    us = 1;
+	}
+	else {
+	    **b = **s;
+	    (*b)++;
+	    us = 0;
+	}
+	(*s)++;
+    }
+    if (us)
+	do {
+	    (*s)--;
+	} while (**s == '_');
+    return 1;
+}
+
+inline static int
+islettere(int c)
+{
+    return (c == 'e' || c == 'E');
+}
+
+static int
+read_num(const char **s, int strict,
+	 char **b)
+{
+    if (**s != '.') {
+	if (!read_digits(s, strict, b))
+	    return 0;
+    }
+
+    if (**s == '.') {
+	**b = **s;
+	(*s)++;
+	(*b)++;
+	if (!read_digits(s, strict, b)) {
+	    (*b)--;
+	    return 0;
+	}
+    }
+
+    if (islettere(**s)) {
+	**b = **s;
+	(*s)++;
+	(*b)++;
+	read_sign(s, b);
+	if (!read_digits(s, strict, b)) {
+	    (*b)--;
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+inline static int
+read_den(const char **s, int strict,
+	 char **b)
+{
+    if (!read_digits(s, strict, b))
+	return 0;
+    return 1;
+}
+
+static int
+read_rat_nos(const char **s, int strict,
+	     char **b)
+{
+    if (!read_num(s, strict, b))
+	return 0;
+    if (**s == '/') {
+	**b = **s;
+	(*s)++;
+	(*b)++;
+	if (!read_den(s, strict, b)) {
+	    (*b)--;
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+static int
+read_rat(const char **s, int strict,
+	 char **b)
+{
+    read_sign(s, b);
+    if (!read_rat_nos(s, strict, b))
+	return 0;
+    return 1;
+}
+
+inline static int
+isimagunit(int c)
+{
+    return (c == 'i' || c == 'I' ||
+	    c == 'j' || c == 'J');
+}
+
+VALUE rb_cstr_to_rat(const char *, int);
 
 static VALUE
-string_to_c_internal(VALUE self)
+str2num(char *s)
 {
-    VALUE s;
+    if (strchr(s, '/'))
+	return rb_cstr_to_rat(s, 0);
+    if (strpbrk(s, ".eE"))
+	return DBL2NUM(rb_cstr_to_dbl(s, 0));
+    return rb_cstr_to_inum(s, 10, 0);
+}
 
-    s = self;
+static int
+read_comp(const char **s, int strict,
+	  VALUE *ret, char **b)
+{
+    char *bb;
+    int sign;
+    VALUE num, num2;
 
-    if (RSTRING_LEN(s) == 0)
-	return rb_assoc_new(Qnil, self);
+    bb = *b;
 
-    {
-	VALUE m, sr, si, re, r, i;
-	int po;
+    sign = read_sign(s, b);
 
-	m = f_match(comp_pat0, s);
-	if (!NIL_P(m)) {
-	    sr = rb_reg_nth_match(1, m);
-	    si = rb_reg_nth_match(2, m);
-	    re = rb_reg_match_post(m);
-	    po = 1;
-	}
-	if (NIL_P(m)) {
-	    m = f_match(comp_pat1, s);
-	    if (!NIL_P(m)) {
-		sr = Qnil;
-		si = rb_reg_nth_match(1, m);
-		if (NIL_P(si))
-		    si = rb_usascii_str_new2("");
-		{
-		    VALUE t;
-
-		    t = rb_reg_nth_match(2, m);
-		    if (NIL_P(t))
-			t = rb_usascii_str_new2("1");
-		    rb_str_concat(si, t);
-		}
-		re = rb_reg_match_post(m);
-		po = 0;
-	    }
-	}
-	if (NIL_P(m)) {
-	    m = f_match(comp_pat2, s);
-	    if (NIL_P(m))
-		return rb_assoc_new(Qnil, self);
-	    sr = rb_reg_nth_match(1, m);
-	    if (NIL_P(rb_reg_nth_match(2, m)))
-		si = Qnil;
-	    else {
-		VALUE t;
-
-		si = rb_reg_nth_match(3, m);
-		t = rb_reg_nth_match(4, m);
-		if (NIL_P(t))
-		    t = rb_usascii_str_new2("1");
-		rb_str_concat(si, t);
-	    }
-	    re = rb_reg_match_post(m);
-	    po = 0;
-	}
-	r = INT2FIX(0);
-	i = INT2FIX(0);
-	if (!NIL_P(sr)) {
-	    if (strchr(RSTRING_PTR(sr), '/'))
-		r = f_to_r(sr);
-	    else if (strpbrk(RSTRING_PTR(sr), ".eE"))
-		r = f_to_f(sr);
-	    else
-		r = f_to_i(sr);
-	}
-	if (!NIL_P(si)) {
-	    if (strchr(RSTRING_PTR(si), '/'))
-		i = f_to_r(si);
-	    else if (strpbrk(RSTRING_PTR(si), ".eE"))
-		i = f_to_f(si);
-	    else
-		i = f_to_i(si);
-	}
-	if (po)
-	    return rb_assoc_new(rb_complex_polar(r, i), re);
-	else
-	    return rb_assoc_new(rb_complex_new2(r, i), re);
+    if (isimagunit(**s)) {
+	(*s)++;
+	num = INT2FIX((sign == '-') ? -1 : + 1);
+	*ret = rb_complex_new2(ZERO, num);
+	return 1; /* e.g. "i" */
     }
+
+    if (!read_rat_nos(s, strict, b)) {
+	**b = '\0';
+	num = str2num(bb);
+	*ret = rb_complex_new2(num, ZERO);
+	return 0; /* e.g. "-" */
+    }
+    **b = '\0';
+    num = str2num(bb);
+
+    if (isimagunit(**s)) {
+	(*s)++;
+	*ret = rb_complex_new2(ZERO, num);
+	return 1; /* e.g. "3i" */
+    }
+
+    if (**s == '@') {
+	int st;
+
+	(*s)++;
+	bb = *b;
+	st = read_rat(s, strict, b);
+	**b = '\0';
+	if (strlen(bb) < 1 ||
+	    !isdecimal(*(bb + strlen(bb) - 1))) {
+	    *ret = rb_complex_new2(num, ZERO);
+	    return 0; /* e.g. "1@-" */
+	}
+	num2 = str2num(bb);
+	*ret = rb_complex_polar(num, num2);
+	if (!st)
+	    return 0; /* e.g. "1@2." */
+	else
+	    return 1; /* e.g. "1@2" */
+    }
+
+    if (issign(**s)) {
+	bb = *b;
+	sign = read_sign(s, b);
+	if (isimagunit(**s))
+	    num2 = INT2FIX((sign == '-') ? -1 : + 1);
+	else {
+	    if (!read_rat_nos(s, strict, b)) {
+		*ret = rb_complex_new2(num, ZERO);
+		return 0; /* e.g. "1+xi" */
+	    }
+	    **b = '\0';
+	    num2 = str2num(bb);
+	}
+	if (!isimagunit(**s)) {
+	    *ret = rb_complex_new2(num, ZERO);
+	    return 0; /* e.g. "1+3x" */
+	}
+	(*s)++;
+	*ret = rb_complex_new2(num, num2);
+	return 1; /* e.g. "1+2i" */
+    }
+    /* !(@, - or +) */
+    {
+	*ret = rb_complex_new2(num, ZERO);
+	return 1; /* e.g. "3" */
+    }
+}
+
+inline static void
+skip_ws(const char **s)
+{
+    while (isspace((unsigned char)**s))
+	(*s)++;
+}
+
+static int
+parse_comp(const char *s, int strict,
+	   VALUE *num)
+{
+    char *buf, *b;
+
+    buf = ALLOCA_N(char, strlen(s) + 1);
+    b = buf;
+
+    skip_ws(&s);
+    if (!read_comp(&s, strict, num, &b))
+	return 0;
+    skip_ws(&s);
+
+    if (strict)
+	if (*s != '\0')
+	    return 0;
+    return 1;
 }
 
 static VALUE
 string_to_c_strict(VALUE self)
 {
-    VALUE a = string_to_c_internal(self);
-    if (NIL_P(RARRAY_PTR(a)[0]) || RSTRING_LEN(RARRAY_PTR(a)[1]) > 0) {
-	VALUE s = f_inspect(self);
-	rb_raise(rb_eArgError, "invalid value for convert(): %s",
-		 StringValuePtr(s));
-    }
-    return RARRAY_PTR(a)[0];
-}
+    char *s;
+    VALUE num;
 
-#define id_gsub rb_intern("gsub")
-#define f_gsub(x,y,z) rb_funcall((x), id_gsub, 2, (y), (z))
+    rb_must_asciicompat(self);
+
+    s = RSTRING_PTR(self);
+
+    if (!s || memchr(s, '\0', RSTRING_LEN(self)))
+	rb_raise(rb_eArgError, "string contains null byte");
+
+    if (s && s[RSTRING_LEN(self)]) {
+	rb_str_modify(self);
+	s = RSTRING_PTR(self);
+	s[RSTRING_LEN(self)] = '\0';
+    }
+
+    if (!s)
+	s = (char *)"";
+
+    if (!parse_comp(s, 1, &num)) {
+	VALUE ins = f_inspect(self);
+	rb_raise(rb_eArgError, "invalid value for convert(): %s",
+		 StringValuePtr(ins));
+    }
+
+    return num;
+}
 
 /*
  * call-seq:
@@ -1582,8 +1812,6 @@ string_to_c_strict(VALUE self)
  * ignores leading whitespaces and trailing garbage.  Any digit
  * sequences can be separated by an underscore.  Returns zero for null
  * or garbage string.
- *
- * For example:
  *
  *    '9'.to_c           #=> (9+0i)
  *    '2.5'.to_c         #=> (2.5+0i)
@@ -1600,19 +1828,25 @@ string_to_c_strict(VALUE self)
 static VALUE
 string_to_c(VALUE self)
 {
-    VALUE s, a, backref;
+    char *s;
+    VALUE num;
 
-    backref = rb_backref_get();
-    rb_match_busy(backref);
+    rb_must_asciicompat(self);
 
-    s = f_gsub(self, underscores_pat, an_underscore);
-    a = string_to_c_internal(s);
+    s = RSTRING_PTR(self);
 
-    rb_backref_set(backref);
+    if (s && s[RSTRING_LEN(self)]) {
+	rb_str_modify(self);
+	s = RSTRING_PTR(self);
+	s[RSTRING_LEN(self)] = '\0';
+    }
 
-    if (!NIL_P(RARRAY_PTR(a)[0]))
-	return RARRAY_PTR(a)[0];
-    return rb_complex_new1(INT2FIX(0));
+    if (!s)
+	s = (char *)"";
+
+    (void)parse_comp(s, 0, &num);
+
+    return num;
 }
 
 static VALUE
@@ -1877,7 +2111,7 @@ Init_Complex(void)
     id_to_r = rb_intern("to_r");
     id_to_s = rb_intern("to_s");
     id_i_real = rb_intern("@real");
-    id_i_imag = rb_intern("@image");
+    id_i_imag = rb_intern("@image"); /* @image, not @imag */
 
     rb_cComplex = rb_define_class("Complex", rb_cNumeric);
 
@@ -1977,10 +2211,9 @@ Init_Complex(void)
     rb_define_method(rb_cComplex, "to_f", nucomp_to_f, 0);
     rb_define_method(rb_cComplex, "to_r", nucomp_to_r, 0);
     rb_define_method(rb_cComplex, "rationalize", nucomp_rationalize, -1);
+    rb_define_method(rb_cComplex, "to_c", nucomp_to_c, 0);
     rb_define_method(rb_cNilClass, "to_c", nilclass_to_c, 0);
     rb_define_method(rb_cNumeric, "to_c", numeric_to_c, 0);
-
-    make_patterns();
 
     rb_define_method(rb_cString, "to_c", string_to_c, 0);
 

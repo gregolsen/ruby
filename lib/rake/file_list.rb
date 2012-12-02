@@ -286,7 +286,7 @@ module Rake
       matched = 0
       each do |fn|
         begin
-          open(fn, "r:ascii-8bit", *options) do |inf|
+          open(fn, "r", *options) do |inf|
             count = 0
             inf.each do |line|
               count += 1
@@ -340,7 +340,7 @@ module Rake
 
     # Add matching glob patterns.
     def add_matching(pattern)
-      Dir[pattern].each do |fn|
+      FileList.glob(pattern).each do |fn|
         self << fn unless exclude?(fn)
       end
     end
@@ -382,6 +382,13 @@ module Rake
       #   FileList.new(*args)
       def [](*args)
         new(*args)
+      end
+
+      # Get a sorted list of files matching the pattern. This method
+      # should be prefered to Dir[pattern] and Dir.glob[pattern] because
+      # the files returned are guaranteed to be sorted.
+      def glob(pattern, *args)
+        Dir.glob(pattern, *args).sort
       end
     end
   end

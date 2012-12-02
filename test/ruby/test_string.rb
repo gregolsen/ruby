@@ -209,7 +209,7 @@ class TestString < Test::Unit::TestCase
 
   def test_LSHIFT # '<<'
     assert_equal(S("world!"), S("world") << 33)
-    assert_equal(S("world!"), S("world") << S('!'))
+    assert_equal(S("world!"), S("world") << S("!"))
 
     s = "a"
     10.times {|i|
@@ -473,6 +473,12 @@ class TestString < Test::Unit::TestCase
   def test_concat
     assert_equal(S("world!"), S("world").concat(33))
     assert_equal(S("world!"), S("world").concat(S('!')))
+
+    bug7090 = '[ruby-core:47751]'
+    result = S("").force_encoding(Encoding::UTF_16LE)
+    result << 0x0300
+    expected = S("\u0300".encode(Encoding::UTF_16LE))
+    assert_equal(expected, result, bug7090)
   end
 
   def test_count
@@ -620,38 +626,158 @@ class TestString < Test::Unit::TestCase
   end
 
   def test_each_byte
+    s = S("ABC")
+
     res = []
-    S("ABC").each_byte {|x| res << x }
+    assert_equal s.object_id, s.each_byte {|x| res << x }.object_id
     assert_equal(65, res[0])
     assert_equal(66, res[1])
     assert_equal(67, res[2])
+
+    assert_equal 65, s.each_byte.next
+  end
+
+  def test_bytes
+    s = S("ABC")
+    assert_equal [65, 66, 67], s.bytes
+
+    if RUBY_VERSION >= "2.1.0"
+      assert_warn(/block not used/) {
+        assert_equal [65, 66, 67], s.bytes {}
+      }
+    else
+      assert_warning(/deprecated/) {
+        res = []
+        assert_equal s.object_id, s.bytes {|x| res << x }.object_id
+        assert_equal(65, res[0])
+        assert_equal(66, res[1])
+        assert_equal(67, res[2])
+      }
+    end
+  end
+
+  def test_each_codepoint
+    # Single byte optimization
+    assert_equal 65, S("ABC").each_codepoint.next
+
+    s = S("\u3042\u3044\u3046")
+
+    res = []
+    assert_equal s.object_id, s.each_codepoint {|x| res << x }.object_id
+    assert_equal(0x3042, res[0])
+    assert_equal(0x3044, res[1])
+    assert_equal(0x3046, res[2])
+
+    assert_equal 0x3042, s.each_codepoint.next
+  end
+
+  def test_codepoints
+    # Single byte optimization
+    assert_equal [65, 66, 67], S("ABC").codepoints
+
+    s = S("\u3042\u3044\u3046")
+    assert_equal [0x3042, 0x3044, 0x3046], s.codepoints
+
+    if RUBY_VERSION >= "2.1.0"
+      assert_warn(/block not used/) {
+        assert_equal [0x3042, 0x3044, 0x3046], s.codepoints {}
+      }
+    else
+      assert_warning(/deprecated/) {
+        res = []
+        assert_equal s.object_id, s.codepoints {|x| res << x }.object_id
+        assert_equal(0x3042, res[0])
+        assert_equal(0x3044, res[1])
+        assert_equal(0x3046, res[2])
+      }
+    end
+  end
+
+  def test_each_char
+    s = S("ABC")
+
+    res = []
+    assert_equal s.object_id, s.each_char {|x| res << x }.object_id
+    assert_equal("A", res[0])
+    assert_equal("B", res[1])
+    assert_equal("C", res[2])
+
+    assert_equal "A", S("ABC").each_char.next
+  end
+
+  def test_chars
+    s = S("ABC")
+    assert_equal ["A", "B", "C"], s.chars
+
+    if RUBY_VERSION >= "2.1.0"
+      assert_warn(/block not used/) {
+        assert_equal ["A", "B", "C"], s.chars {}
+      }
+    else
+      assert_warning(/deprecated/) {
+        res = []
+        assert_equal s.object_id, s.chars {|x| res << x }.object_id
+        assert_equal("A", res[0])
+        assert_equal("B", res[1])
+        assert_equal("C", res[2])
+      }
+    end
   end
 
   def test_each_line
     save = $/
     $/ = "\n"
     res=[]
-    S("hello\nworld").lines.each {|x| res << x}
+    S("hello\nworld").each_line {|x| res << x}
     assert_equal(S("hello\n"), res[0])
     assert_equal(S("world"),   res[1])
 
     res=[]
-    S("hello\n\n\nworld").lines(S('')).each {|x| res << x}
+    S("hello\n\n\nworld").each_line(S('')) {|x| res << x}
     assert_equal(S("hello\n\n\n"), res[0])
     assert_equal(S("world"),       res[1])
 
     $/ = "!"
 
     res=[]
-    S("hello!world").lines.each {|x| res << x}
+    S("hello!world").each_line {|x| res << x}
     assert_equal(S("hello!"), res[0])
     assert_equal(S("world"),  res[1])
+
+    $/ = "ab"
+
+    res=[]
+    S("a").lines.each {|x| res << x}
+    assert_equal(1, res.size)
+    assert_equal(S("a"), res[0])
 
     $/ = save
 
     s = nil
     "foo\nbar".each_line(nil) {|s2| s = s2 }
     assert_equal("foo\nbar", s)
+
+    assert_equal "hello\n", S("hello\nworld").each_line.next
+    assert_equal "hello\nworld", S("hello\nworld").each_line(nil).next
+  end
+
+  def test_lines
+    s = S("hello\nworld")
+    assert_equal ["hello\n", "world"], s.lines
+    assert_equal ["hello\nworld"], s.lines(nil)
+
+    if RUBY_VERSION >= "2.1.0"
+      assert_warn(/block not used/) {
+        assert_equal ["hello\n", "world"], s.lines {}
+      }
+    else
+      assert_warning(/deprecated/) {
+        res = []
+        assert_equal s.object_id, s.lines {|x| res << x }.object_id
+        assert_equal(S("hello\n"), res[0])
+        assert_equal(S("world"),  res[1])
+      }
+    end
   end
 
   def test_empty?
@@ -810,6 +936,20 @@ class TestString < Test::Unit::TestCase
     assert_nil(S("hello").index(?z))
     assert_nil(S("hello").index(S("z")))
     assert_nil(S("hello").index(/z./))
+
+    assert_equal(0, S("").index(S("")))
+    assert_equal(0, S("").index(//))
+    assert_nil(S("").index(S("hello")))
+    assert_nil(S("").index(/hello/))
+    assert_equal(0, S("hello").index(S("")))
+    assert_equal(0, S("hello").index(//))
+
+    s = S("long") * 1000 << "x"
+    assert_nil(s.index(S("y")))
+    assert_equal(4 * 1000, s.index(S("x")))
+    s << "yx"
+    assert_equal(4 * 1000, s.index(S("x")))
+    assert_equal(4 * 1000, s.index(S("xyx")))
 
     o = Object.new
     def o.to_str; "bar"; end
@@ -1358,7 +1498,7 @@ class TestString < Test::Unit::TestCase
 
     assert_equal("abce", "abcd".succ)
     assert_equal("THX1139", "THX1138".succ)
-    assert_equal("<<koalb>>", "<<koala>>".succ)
+    assert_equal("<\<koalb>>", "<\<koala>>".succ)
     assert_equal("2000aaa", "1999zzz".succ)
     assert_equal("AAAA0000", "ZZZ9999".succ)
     assert_equal("**+", "***".succ)
@@ -1814,7 +1954,7 @@ class TestString < Test::Unit::TestCase
   def test_match_method
     assert_equal("bar", "foobarbaz".match(/bar/).to_s)
 
-    o = /foo/
+    o = Regexp.new('foo')
     def o.match(x, y, z); x + y + z; end
     assert_equal("foobarbaz", "foo".match(o, "bar", "baz"))
     x = nil
@@ -1970,11 +2110,15 @@ class TestString < Test::Unit::TestCase
       assert_equal('"ab\\"c"', "ab\"c".encode(e).inspect, bug4081)
     end
     begin
+      verbose, $VERBOSE = $VERBOSE, nil
       ext = Encoding.default_external
       Encoding.default_external = "us-ascii"
+      $VERBOSE = verbose
       i = "abc\"\\".force_encoding("utf-8").inspect
     ensure
+      $VERBOSE = nil
       Encoding.default_external = ext
+      $VERBOSE = verbose
     end
     assert_equal('"abc\\"\\\\"', i, bug4081)
   end

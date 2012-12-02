@@ -42,7 +42,6 @@ extern "C" {
  * the kernel.
  */
 
-#define ID_ALLOCATOR 1
 #define UNLIMITED_ARGUMENTS (-1)
 
 /* array.c */
@@ -57,6 +56,7 @@ VALUE rb_ary_tmp_new(long);
 void rb_ary_free(VALUE);
 void rb_ary_modify(VALUE);
 VALUE rb_ary_freeze(VALUE);
+VALUE rb_ary_shared_with_p(VALUE, VALUE);
 VALUE rb_ary_aref(int, VALUE*, VALUE);
 VALUE rb_ary_subseq(VALUE, long, long);
 void rb_ary_store(VALUE, long, VALUE);
@@ -173,6 +173,7 @@ VALUE rb_define_class_id_under(VALUE, ID, VALUE);
 VALUE rb_module_new(void);
 VALUE rb_define_module_id(ID);
 VALUE rb_define_module_id_under(VALUE, ID);
+VALUE rb_include_class_new(VALUE, VALUE);
 VALUE rb_mod_included_modules(VALUE);
 VALUE rb_mod_include_p(VALUE, VALUE);
 VALUE rb_mod_ancestors(VALUE);
@@ -201,11 +202,13 @@ VALUE rb_fiber_alive_p(VALUE);
 VALUE rb_enum_values_pack(int, VALUE*);
 /* enumerator.c */
 VALUE rb_enumeratorize(VALUE, VALUE, int, VALUE *);
-#define RETURN_ENUMERATOR(obj, argc, argv) do {				\
+VALUE rb_enumeratorize_with_size(VALUE, VALUE, int, VALUE *, VALUE (*)(ANYARGS));
+#define RETURN_SIZED_ENUMERATOR(obj, argc, argv, size_fn) do {		\
 	if (!rb_block_given_p())					\
-	    return rb_enumeratorize((obj), ID2SYM(rb_frame_this_func()),\
-				    (argc), (argv));			\
+	    return rb_enumeratorize_with_size((obj), ID2SYM(rb_frame_this_func()),\
+				    (argc), (argv), (size_fn));		\
     } while (0)
+#define RETURN_ENUMERATOR(obj, argc, argv) RETURN_SIZED_ENUMERATOR(obj, argc, argv, 0)
 /* error.c */
 VALUE rb_exc_new(VALUE, const char*, long);
 VALUE rb_exc_new2(VALUE, const char*);
@@ -458,6 +461,7 @@ VALUE rb_hash_lookup(VALUE, VALUE);
 VALUE rb_hash_lookup2(VALUE, VALUE, VALUE);
 VALUE rb_hash_fetch(VALUE, VALUE);
 VALUE rb_hash_aset(VALUE, VALUE, VALUE);
+VALUE rb_hash_clear(VALUE);
 VALUE rb_hash_delete_if(VALUE);
 VALUE rb_hash_delete(VALUE,VALUE);
 typedef VALUE rb_hash_update_func(VALUE newkey, VALUE oldkey, VALUE value);
@@ -515,7 +519,6 @@ NORETURN(void rb_num_zerodiv(void));
 VALUE rb_num_coerce_bin(VALUE, VALUE, ID);
 VALUE rb_num_coerce_cmp(VALUE, VALUE, ID);
 VALUE rb_num_coerce_relop(VALUE, VALUE, ID);
-VALUE rb_float_new(double);
 VALUE rb_num2fix(VALUE);
 VALUE rb_fix2str(VALUE, int);
 VALUE rb_dbl_cmp(double, double);
@@ -611,6 +614,7 @@ VALUE rb_random_bytes(VALUE rnd, long n);
 VALUE rb_random_int(VALUE rnd, VALUE max);
 unsigned int rb_random_int32(VALUE rnd);
 double rb_random_real(VALUE rnd);
+unsigned long rb_random_ulong_limited(VALUE rnd, unsigned long limit);
 unsigned long rb_genrand_ulong_limited(unsigned long i);
 /* re.c */
 #define rb_memcmp memcmp
@@ -819,6 +823,8 @@ typedef void rb_unblock_function_t(void *);
 typedef VALUE rb_blocking_function_t(void *);
 void rb_thread_check_ints(void);
 int rb_thread_interrupted(VALUE thval);
+
+/* Use rb_thread_call_without_gvl family instead. */
 DEPRECATED(VALUE rb_thread_blocking_region(rb_blocking_function_t *func, void *data1,
 					   rb_unblock_function_t *ubf, void *data2));
 #define RUBY_UBF_IO ((rb_unblock_function_t *)-1)

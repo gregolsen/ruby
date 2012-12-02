@@ -348,7 +348,7 @@ class TestProcess < Test::Unit::TestCase
     with_tmpchdir {|d|
       write_file 's', <<-"End"
         ENV["mgg"] = nil
-        prog = "/nonexistent"
+        prog = "./nonexistent"
         begin
           Process.exec({"mgg" => "mggoo"}, [prog, prog])
         rescue Errno::ENOENT
@@ -403,8 +403,8 @@ class TestProcess < Test::Unit::TestCase
     with_tmpchdir {|d|
       Dir.mkdir "foo"
       system(*PWD, :chdir => "foo", :out => "open_chdir_test")
-      assert(File.exist?("open_chdir_test"))
-      assert(!File.exist?("foo/open_chdir_test"))
+      assert_file.exist?("open_chdir_test")
+      assert_file.not_exist?("foo/open_chdir_test")
       assert_equal("#{d}/foo", File.read("open_chdir_test").chomp)
     }
   end
@@ -1478,6 +1478,59 @@ class TestProcess < Test::Unit::TestCase
     assert_nothing_raised { IO.popen([*TRUECOMMAND, :new_pgroup=>true]) {} }
   end
 
+  def test_execopts_uid
+    feature6975 = '[ruby-core:47414]'
+
+    [30000, [Process.uid, ENV["USER"]]].each do |uid, user|
+      if user
+        assert_nothing_raised(feature6975) do
+          begin
+            system(*TRUECOMMAND, uid: user)
+          rescue Errno::EPERM, NotImplementedError
+          end
+        end
+      end
+
+      assert_nothing_raised(feature6975) do
+        begin
+          system(*TRUECOMMAND, uid: uid)
+        rescue Errno::EPERM, NotImplementedError
+        end
+      end
+
+      assert_nothing_raised(feature6975) do
+        begin
+          u = IO.popen([RUBY, "-e", "print Process.uid", uid: user||uid], &:read)
+          assert_equal(uid.to_s, u, feature6975)
+        rescue Errno::EPERM, NotImplementedError
+        end
+      end
+    end
+  end
+
+  def test_execopts_gid
+    skip "Process.groups not implemented on Windows platform" if windows?
+    feature6975 = '[ruby-core:47414]'
+
+    [30000, *Process.groups.map {|g| g = Etc.getgrgid(g); [g.name, g.gid]}].each do |group, gid|
+      assert_nothing_raised(feature6975) do
+        begin
+          system(*TRUECOMMAND, gid: group)
+        rescue Errno::EPERM, NotImplementedError
+        end
+      end
+
+      gid = "#{gid || group}"
+      assert_nothing_raised(feature6975) do
+        begin
+          g = IO.popen([RUBY, "-e", "print Process.gid", gid: group], &:read)
+          assert_equal(gid, g, feature6975)
+        rescue Errno::EPERM, NotImplementedError
+        end
+      end
+    end
+  end
+
   def test_sigpipe
     system(RUBY, "-e", "")
     with_pipe {|r, w|
@@ -1505,4 +1558,19 @@ class TestProcess < Test::Unit::TestCase
     }
   end if File.executable?("/bin/sh")
 
+  def test_setsid
+    return unless Process.respond_to?(:setsid)
+    return unless Process.respond_to?(:getsid)
+
+    IO.popen([RUBY, "-e", <<EOS]) do|io|
+	Marshal.dump(Process.getsid, STDOUT)
+	newsid = Process.setsid
+	Marshal.dump(newsid, STDOUT)
+	STDOUT.flush
+EOS
+
+      assert_equal(Marshal.load(io), Process.getsid)
+      assert_equal(Marshal.load(io), Process.getsid(io.pid))
+    end
+  end
 end

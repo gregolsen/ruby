@@ -1,3 +1,4 @@
+# coding: US-ASCII
 require 'test/unit'
 require_relative 'envutil'
 
@@ -252,7 +253,7 @@ class TestM17N < Test::Unit::TestCase
     Encoding.default_external = Encoding::UTF_8
     o = Object.new
     [Encoding::UTF_16BE, Encoding::UTF_16LE, Encoding::UTF_32BE, Encoding::UTF_32LE].each do |e|
-      o.instance_eval "def inspect;'abc'.encode('#{e}');end"
+      o.instance_eval "undef inspect;def inspect;'abc'.encode('#{e}');end"
       assert_raise(Encoding::CompatibilityError) { [o].inspect }
     end
   ensure
@@ -1460,6 +1461,7 @@ class TestM17N < Test::Unit::TestCase
 
   def test_combchar_codepoint
     assert_equal([0x30BB, 0x309A], "\u30BB\u309A".codepoints.to_a)
+    assert_equal([0x30BB, 0x309A], "\u30BB\u309A".codepoints.to_a)
   end
 
   def each_encoding(*strings)
@@ -1468,5 +1470,15 @@ class TestM17N < Test::Unit::TestCase
       strs = strings.map {|s| s.encode(enc)} rescue next
       yield(*strs)
     end
+  end
+
+  def test_str_b
+    s = "\u3042"
+    assert_equal(a("\xE3\x81\x82"), s.b)
+    assert_equal(Encoding::ASCII_8BIT, s.b.encoding)
+    s.taint
+    assert_equal(true, s.b.tainted?)
+    s.untrust
+    assert_equal(true, s.b.untrusted?)
   end
 end

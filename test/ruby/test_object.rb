@@ -21,6 +21,17 @@ class TestObject < Test::Unit::TestCase
     end
   end
 
+  def test_init_dupclone
+    cls = Class.new do
+      def initialize_clone(orig); throw :initialize_clone; end
+      def initialize_dup(orig); throw :initialize_dup; end
+    end
+
+    obj = cls.new
+    assert_throws(:initialize_clone) {obj.clone}
+    assert_throws(:initialize_dup) {obj.dup}
+  end
+
   def test_instance_of
     assert_raise(TypeError) { 1.instance_of?(1) }
   end
@@ -51,10 +62,10 @@ class TestObject < Test::Unit::TestCase
   end
 
   def test_freeze_immediate
-    assert_equal(false, 1.frozen?)
+    assert_equal(true, 1.frozen?)
     1.freeze
     assert_equal(true, 1.frozen?)
-    assert_equal(false, 2.frozen?)
+    assert_equal(true, 2.frozen?)
   end
 
   def test_nil_to_f
@@ -688,6 +699,55 @@ class TestObject < Test::Unit::TestCase
     s = x.to_s
     assert_equal(true, s.untrusted?)
     assert_equal(true, s.tainted?)
+
+    x = eval(<<-EOS)
+      class ToS\u{3042}
+        new.to_s
+      end
+    EOS
+    assert_match(/\bToS\u{3042}:/, x)
+  end
+
+  def test_inspect
+    x = Object.new
+    assert_match(/\A#<Object:0x\h+>\z/, x.inspect)
+
+    x.instance_variable_set(:@ivar, :value)
+    assert_match(/\A#<Object:0x\h+ @ivar=:value>\z/, x.inspect)
+
+    x = Object.new
+    x.instance_variable_set(:@recur, x)
+    assert_match(/\A#<Object:0x\h+ @recur=#<Object:0x\h+ \.\.\.>>\z/, x.inspect)
+
+    x = Object.new
+    x.instance_variable_set(:@foo, "value")
+    x.instance_variable_set(:@bar, 42)
+    assert_match(/\A#<Object:0x\h+ (?:@foo="value", @bar=42|@bar=42, @foo="value")>\z/, x.inspect)
+
+    # #inspect does not call #to_s anymore
+    feature6130 = '[ruby-core:43238]'
+    x = Object.new
+    def x.to_s
+      "to_s"
+    end
+    assert_match(/\A#<Object:0x\h+>\z/, x.inspect, feature6130)
+
+    x = eval(<<-EOS)
+      class Inspect\u{3042}
+        new.inspect
+      end
+    EOS
+    assert_match(/\bInspect\u{3042}:/, x)
+
+    x = eval(<<-EOS)
+      class Inspect\u{3042}
+        def initialize
+          @\u{3044} = 42
+        end
+        new.inspect
+      end
+    EOS
+    assert_match(/\bInspect\u{3042}:.* @\u{3044}=42\b/, x)
   end
 
   def test_exec_recursive

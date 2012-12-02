@@ -137,7 +137,10 @@ module Test
         rescue Errno::EPIPE
         rescue Exception => e
           begin
-            _report "bye", Marshal.dump(e)
+            trace = e.backtrace
+            err = ["#{trace.shift}: #{e.message} (#{e.class})"] + trace.map{|t| t.prepend("\t") }
+
+            _report "bye", Marshal.dump(err.join("\n"))
           rescue Errno::EPIPE;end
           exit
         ensure
@@ -152,7 +155,7 @@ module Test
       end
 
       def puke(klass, meth, e)
-        @partial_report << [klass.name, meth, e]
+        @partial_report << [klass.name, meth, e.is_a?(MiniTest::Assertion) ? e : ProxyError.new(e)]
         super
       end
     end

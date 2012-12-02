@@ -52,6 +52,18 @@ class TestBigDecimal < Test::Unit::TestCase
     assert_equal(1, BigDecimal("1"))
     assert_equal(1, BigDecimal("1", 1))
     assert_raise(ArgumentError) { BigDecimal("1", -1) }
+    assert_raise(ArgumentError) { BigDecimal(4.2) }
+    begin
+      BigDecimal(4.2)
+    rescue ArgumentError => error
+      assert_match(/Float/, error.message)
+    end
+    assert_raise(ArgumentError) { BigDecimal(42.quo(7)) }
+    begin
+      BigDecimal(42.quo(7))
+    rescue ArgumentError => error
+      assert_match(/Rational/, error.message)
+    end
   end
 
   def test_global_new_with_integer
@@ -540,15 +552,40 @@ class TestBigDecimal < Test::Unit::TestCase
     assert_kind_of(Float,   x .to_f)
     assert_kind_of(Float, (-x).to_f)
 
+    bug6944 = '[ruby-core:47342]'
+
     BigDecimal.mode(BigDecimal::EXCEPTION_UNDERFLOW, true)
-    assert_raise(FloatDomainError) {
-      BigDecimal("1e#{Float::MIN_10_EXP - 2*Float::DIG}").to_f }
-    assert_raise(FloatDomainError) {
-      BigDecimal("-1e#{Float::MIN_10_EXP - 2*Float::DIG}").to_f }
+    x = "1e#{Float::MIN_10_EXP - 2*Float::DIG}"
+    assert_raise(FloatDomainError, x) {BigDecimal(x).to_f}
+    x = "-#{x}"
+    assert_raise(FloatDomainError, x) {BigDecimal(x).to_f}
+    x = "1e#{Float::MIN_10_EXP - Float::DIG}"
+    assert_nothing_raised(FloatDomainError, x) {
+      assert_in_delta(0.0, BigDecimal(x).to_f, 10**Float::MIN_10_EXP, bug6944)
+    }
+    x = "-#{x}"
+    assert_nothing_raised(FloatDomainError, x) {
+      assert_in_delta(0.0, BigDecimal(x).to_f, 10**Float::MIN_10_EXP, bug6944)
+    }
 
     BigDecimal.mode(BigDecimal::EXCEPTION_UNDERFLOW, false)
-    assert_equal( 0.0, BigDecimal("1e#{Float::MIN_10_EXP - 2*Float::DIG}").to_f)
-    assert_equal(-0.0, BigDecimal("-1e#{Float::MIN_10_EXP - 2*Float::DIG}").to_f)
+    x = "1e#{Float::MIN_10_EXP - 2*Float::DIG}"
+    assert_equal( 0.0, BigDecimal(x).to_f, x)
+    x = "-#{x}"
+    assert_equal(-0.0, BigDecimal(x).to_f, x)
+    x = "1e#{Float::MIN_10_EXP - Float::DIG}"
+    assert_nothing_raised(FloatDomainError, x) {
+      assert_in_delta(0.0, BigDecimal(x).to_f, 10**Float::MIN_10_EXP, bug6944)
+    }
+    x = "-#{x}"
+    assert_nothing_raised(FloatDomainError, x) {
+      assert_in_delta(0.0, BigDecimal(x).to_f, 10**Float::MIN_10_EXP, bug6944)
+    }
+
+    assert_equal( 0.0, BigDecimal(  '9e-325').to_f)
+    assert_equal( 0.0, BigDecimal( '10e-325').to_f)
+    assert_equal(-0.0, BigDecimal( '-9e-325').to_f)
+    assert_equal(-0.0, BigDecimal('-10e-325').to_f)
   end
 
   def test_coerce
@@ -562,6 +599,10 @@ class TestBigDecimal < Test::Unit::TestCase
 
     a, b = BigDecimal("0.11111").coerce(1.quo(3))
     assert_equal(BigDecimal("0." + "3"*a.precs[0]), a)
+
+    assert_nothing_raised(TypeError, '#7176') do
+      BigDecimal.new('1') + Rational(1)
+    end
   end
 
   def test_uplus

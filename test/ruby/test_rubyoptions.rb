@@ -1,3 +1,4 @@
+# -*- coding: us-ascii -*-
 require 'test/unit'
 
 require 'tmpdir'
@@ -29,11 +30,16 @@ class TestRubyOptions < Test::Unit::TestCase
   def test_usage
     assert_in_out_err(%w(-h)) do |r, e|
       assert_operator(r.size, :<=, 24)
+      longer = r[1..-1].select {|x| x.size > 80}
+      assert_equal([], longer)
       assert_equal([], e)
     end
+  end
 
+  def test_usage_long
     assert_in_out_err(%w(--help)) do |r, e|
-      assert_operator(r.size, :<=, 24)
+      longer = r[1..-1].select {|x| x.size > 80}
+      assert_equal([], longer)
       assert_equal([], e)
     end
   end
@@ -199,14 +205,21 @@ class TestRubyOptions < Test::Unit::TestCase
   end
 
   def test_encoding
-    assert_in_out_err(%w(-Eutf-8), "p '\u3042'", [], /invalid multibyte char/)
-
     assert_in_out_err(%w(--encoding), "", [], /missing argument for --encoding/)
 
     assert_in_out_err(%w(--encoding test_ruby_test_rubyoptions_foobarbazqux), "", [],
                       /unknown encoding name - test_ruby_test_rubyoptions_foobarbazqux \(RuntimeError\)/)
 
-    assert_in_out_err(%w(--encoding utf-8), "p '\u3042'", [], /invalid multibyte char/)
+    if /mswin|mingw/ =~ RUBY_PLATFORM &&
+      (str = "\u3042".force_encoding(Encoding.find("locale"))).valid_encoding?
+      # This result depends on locale because LANG=C doesn't affect locale
+      # on Windows.
+      out, err = [str], []
+    else
+      out, err = [], /invalid multibyte char/
+    end
+    assert_in_out_err(%w(-Eutf-8), "puts '\u3042'", out, err)
+    assert_in_out_err(%w(--encoding utf-8), "puts '\u3042'", out, err)
   end
 
   def test_syntax_check
@@ -329,12 +342,33 @@ class TestRubyOptions < Test::Unit::TestCase
     t.puts "  end"
     t.puts "end"
     t.close
-    err = ["#{t.path}:1: warning: found = in conditional, should be ==",
-           "#{t.path}:4: warning: found = in conditional, should be =="]
-    err = /\A(#{Regexp.quote(t.path)}):1(: warning: found = in conditional, should be ==)\n\1:4\2\Z/
+    warning = ' warning: found = in conditional, should be =='
+    err = ["#{t.path}:1:#{warning}",
+           "#{t.path}:4:#{warning}",
+          ]
     bug2136 = '[ruby-dev:39363]'
     assert_in_out_err(["-w", t.path], "", [], err, bug2136)
     assert_in_out_err(["-wr", t.path, "-e", ""], "", [], err, bug2136)
+
+    t.open
+    t.truncate(0)
+    t.puts "if a = ''; end"
+    t.puts "if a = []; end"
+    t.puts "if a = [1]; end"
+    t.puts "if a = [a]; end"
+    t.puts "if a = {}; end"
+    t.puts "if a = {1=>2}; end"
+    t.puts "if a = {3=>a}; end"
+    t.close
+    err = ["#{t.path}:1:#{warning}",
+           "#{t.path}:2:#{warning}",
+           "#{t.path}:3:#{warning}",
+           "#{t.path}:5:#{warning}",
+           "#{t.path}:6:#{warning}",
+          ]
+    feature4299 = '[ruby-dev:43083]'
+    assert_in_out_err(["-w", t.path], "", [], err, feature4299)
+    assert_in_out_err(["-wr", t.path, "-e", ""], "", [], err, feature4299)
   ensure
     t.close(true) if t
   end
@@ -381,7 +415,7 @@ class TestRubyOptions < Test::Unit::TestCase
     rubybin = Regexp.quote(EnvUtil.rubybin)
     pat = Regexp.quote(notexist)
     bug1573 = '[ruby-core:23717]'
-    assert_equal(false, File.exist?(notexist))
+    assert_file.not_exist?(notexist)
     assert_in_out_err(["-r", notexist, "-ep"], "", [], /.* -- #{pat} \(LoadError\)/, bug1573)
     assert_in_out_err([notexist], "", [], /#{rubybin}:.* -- #{pat} \(LoadError\)/, bug1573)
   end
@@ -570,5 +604,15 @@ class TestRubyOptions < Test::Unit::TestCase
   def test_script_is_directory
     feature2408 = '[ruby-core:26925]'
     assert_in_out_err(%w[.], "", [], /Is a directory -- \./, feature2408)
+  end
+
+  def test_pflag_gsub
+    bug7157 = '[ruby-core:47967]'
+    assert_in_out_err(['-p', '-e', 'gsub(/t.*/){"TEST"}'], %[test], %w[TEST], [], bug7157)
+  end
+
+  def test_pflag_sub
+    bug7157 = '[ruby-core:47967]'
+    assert_in_out_err(['-p', '-e', 'sub(/t.*/){"TEST"}'], %[test], %w[TEST], [], bug7157)
   end
 end

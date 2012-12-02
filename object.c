@@ -22,6 +22,7 @@
 #include <float.h>
 #include "constant.h"
 #include "internal.h"
+#include "probes.h"
 
 VALUE rb_cBasicObject;
 VALUE rb_mKernel;
@@ -370,10 +371,10 @@ rb_obj_init_dup_clone(VALUE obj, VALUE orig)
 VALUE
 rb_any_to_s(VALUE obj)
 {
-    const char *cname = rb_obj_classname(obj);
     VALUE str;
+    VALUE cname = rb_class_name(CLASS_OF(obj));
 
-    str = rb_sprintf("#<%s:%p>", cname, (void*)obj);
+    str = rb_sprintf("#<%"PRIsVALUE":%p>", cname, (void*)obj);
     OBJ_INFECT(str, obj);
 
     return str;
@@ -450,11 +451,8 @@ inspect_obj(VALUE obj, VALUE str, int recur)
  *     obj.inspect   -> string
  *
  * Returns a string containing a human-readable representation of <i>obj</i>.
- * By default, if the <i>obj</i> has instance variables, show the class name
- * and instance variable details which is the list of the name and the result
- * of <i>inspect</i> method for each instance variable.
- * Otherwise uses the <i>to_s</i> method to generate the string.
- * If the <i>to_s</i> method is overridden, uses it.
+ * By default, show the class name and the list of the instance variables and
+ * their values (by calling #inspect on each of them).
  * User defined classes should override this method to make better
  * representation of <i>obj</i>.  When overriding this method, it should
  * return a string whose encoding is compatible with the default external
@@ -479,35 +477,22 @@ inspect_obj(VALUE obj, VALUE str, int recur)
  *         "baz"
  *       end
  *     end
- *     Baz.new.inspect                  #=> "baz"
+ *     Baz.new.inspect                  #=> "#<Baz:0x0300c868>"
  */
 
 static VALUE
 rb_obj_inspect(VALUE obj)
 {
-    if (RB_TYPE_P(obj, T_OBJECT) && rb_obj_basic_to_s_p(obj)) {
-        int has_ivar = 0;
-        VALUE *ptr = ROBJECT_IVPTR(obj);
-        long len = ROBJECT_NUMIV(obj);
-        long i;
+    if (rb_ivar_count(obj) > 0) {
+	VALUE str;
+	VALUE c = rb_class_name(CLASS_OF(obj));
 
-        for (i = 0; i < len; i++) {
-            if (ptr[i] != Qundef) {
-                has_ivar = 1;
-                break;
-            }
-        }
-
-        if (has_ivar) {
-            VALUE str;
-            const char *c = rb_obj_classname(obj);
-
-            str = rb_sprintf("-<%s:%p", c, (void*)obj);
-            return rb_exec_recursive(inspect_obj, obj, str);
-        }
+	str = rb_sprintf("-<%"PRIsVALUE":%p", c, (void*)obj);
+	return rb_exec_recursive(inspect_obj, obj, str);
+    }
+    else {
 	return rb_any_to_s(obj);
     }
-    return rb_funcall(obj, rb_intern("to_s"), 0, 0);
 }
 
 static VALUE
@@ -1352,6 +1337,9 @@ rb_obj_cmp(VALUE obj1, VALUE obj2)
 static VALUE
 rb_mod_to_s(VALUE klass)
 {
+    ID id_refined_class, id_defined_at;
+    VALUE refined_class, defined_at;
+
     if (FL_TEST(klass, FL_SINGLETON)) {
 	VALUE s = rb_usascii_str_new2("#<");
 	VALUE v = rb_iv_get(klass, "__attached__");
@@ -1367,6 +1355,19 @@ rb_mod_to_s(VALUE klass)
 	}
 	rb_str_cat2(s, ">");
 
+	return s;
+    }
+    CONST_ID(id_refined_class, "__refined_class__");
+    refined_class = rb_attr_get(klass, id_refined_class);
+    if (!NIL_P(refined_class)) {
+	VALUE s = rb_usascii_str_new2("#<refinement:");
+
+	rb_str_concat(s, rb_inspect(refined_class));
+	rb_str_cat2(s, "@");
+	CONST_ID(id_defined_at, "__defined_at__");
+	defined_at = rb_attr_get(klass, id_defined_at);
+	rb_str_concat(s, rb_inspect(defined_at));
+	rb_str_cat2(s, ">");
 	return s;
     }
     return rb_str_dup(rb_class_name(klass));
@@ -1633,6 +1634,9 @@ rb_class_initialize(int argc, VALUE *argv, VALUE klass)
     else {
 	rb_scan_args(argc, argv, "01", &super);
 	rb_check_inheritable(super);
+	if (super != rb_cBasicObject && !RCLASS_SUPER(super)) {
+	    rb_raise(rb_eTypeError, "can't inherit uninitialized class");
+	}
     }
     RCLASS_SUPER(klass) = super;
     rb_make_metaclass(klass, RBASIC(super)->klass);
@@ -1668,6 +1672,7 @@ VALUE
 rb_obj_alloc(VALUE klass)
 {
     VALUE obj;
+    rb_alloc_func_t allocator;
 
     if (RCLASS_SUPER(klass) == 0 && klass != rb_cBasicObject) {
 	rb_raise(rb_eTypeError, "can't instantiate uninitialized class");
@@ -1675,7 +1680,23 @@ rb_obj_alloc(VALUE klass)
     if (FL_TEST(klass, FL_SINGLETON)) {
 	rb_raise(rb_eTypeError, "can't create instance of singleton class");
     }
-    obj = rb_funcall(klass, ID_ALLOCATOR, 0, 0);
+    allocator = rb_get_alloc_func(klass);
+    if (!allocator) {
+	rb_raise(rb_eTypeError, "allocator undefined for %"PRIsVALUE,
+		 klass);
+    }
+
+#if !defined(DTRACE_PROBES_DISABLED) || !DTRACE_PROBES_DISABLED
+    if (RUBY_DTRACE_OBJECT_CREATE_ENABLED()) {
+        const char * file = rb_sourcefile();
+        RUBY_DTRACE_OBJECT_CREATE(rb_class2name(klass),
+				  file ? file : "",
+				  rb_sourceline());
+    }
+#endif
+
+    obj = (*allocator)(klass);
+
     if (rb_obj_class(obj) != rb_class_real(klass)) {
 	rb_raise(rb_eTypeError, "wrong instance allocation");
     }
@@ -1685,8 +1706,7 @@ rb_obj_alloc(VALUE klass)
 static VALUE
 rb_class_allocate_instance(VALUE klass)
 {
-    NEWOBJ(obj, struct RObject);
-    OBJSETUP(obj, klass, T_OBJECT);
+    NEWOBJ_OF(obj, struct RObject, klass, T_OBJECT);
     return (VALUE)obj;
 }
 
@@ -1833,33 +1853,11 @@ rb_mod_attr_accessor(int argc, VALUE *argv, VALUE klass)
     return Qnil;
 }
 
-/*
- *  call-seq:
- *     mod.const_get(sym, inherit=true)    -> obj
- *
- *  Checks for a constant with the given name in <i>mod</i>
- *  If +inherit+ is set, the lookup will also search
- *  the ancestors (and +Object+ if <i>mod</i> is a +Module+.)
- *
- *  The value of the constant is returned if a definition is found,
- *  otherwise a +NameError+ is raised.
- *
- *     Math.const_get(:PI)   #=> 3.14159265358979
- */
-
 static VALUE
-rb_mod_const_get(int argc, VALUE *argv, VALUE mod)
+rb_mod_single_const_get(VALUE mod, VALUE name, VALUE recur)
 {
-    VALUE name, recur;
     ID id;
 
-    if (argc == 1) {
-	name = argv[0];
-	recur = Qtrue;
-    }
-    else {
-	rb_scan_args(argc, argv, "11", &name, &recur);
-    }
     id = rb_check_id(&name);
     if (!id) {
 	if (!rb_is_const_name(name)) {
@@ -1881,6 +1879,116 @@ rb_mod_const_get(int argc, VALUE *argv, VALUE mod)
 	rb_name_error(id, "wrong constant name %s", rb_id2name(id));
     }
     return RTEST(recur) ? rb_const_get(mod, id) : rb_const_get_at(mod, id);
+}
+
+/*
+ *  call-seq:
+ *     mod.const_get(sym, inherit=true)    -> obj
+ *     mod.const_get(str, inherit=true)    -> obj
+ *
+ *  Checks for a constant with the given name in <i>mod</i>
+ *  If +inherit+ is set, the lookup will also search
+ *  the ancestors (and +Object+ if <i>mod</i> is a +Module+.)
+ *
+ *  The value of the constant is returned if a definition is found,
+ *  otherwise a +NameError+ is raised.
+ *
+ *     Math.const_get(:PI)   #=> 3.14159265358979
+ *
+ *  This method will recursively look up constant names if a namespaced
+ *  class name is provided.  For example:
+ *
+ *     module Foo; class Bar; end end
+ *     Object.const_get 'Foo::Bar'
+ *
+ *  The +inherit+ flag is respected on each lookup.  For example:
+ *
+ *     module Foo
+ *       class Bar
+ *         VAL = 10
+ *       end
+ *
+ *       class Baz < Bar; end
+ *     end
+ *
+ *     Object.const_get 'Foo::Baz::VAL'         # => 10
+ *     Object.const_get 'Foo::Baz::VAL', false  # => NameError
+ */
+
+static VALUE
+rb_mod_const_get(int argc, VALUE *argv, VALUE mod)
+{
+    VALUE name, recur;
+    rb_encoding *enc;
+    const char *pbeg, *p, *path;
+    ID id;
+
+    if (argc == 1) {
+	name = argv[0];
+	recur = Qtrue;
+    }
+    else {
+	rb_scan_args(argc, argv, "11", &name, &recur);
+    }
+
+    if (SYMBOL_P(name)) {
+	name = rb_sym_to_s(name);
+    }
+
+    name = rb_check_string_type(name);
+    Check_Type(name, T_STRING);
+
+    enc = rb_enc_get(name);
+    path = RSTRING_PTR(name);
+
+    if (!rb_enc_asciicompat(enc)) {
+	rb_raise(rb_eArgError, "invalid class path encoding (non ASCII)");
+    }
+
+    pbeg = p = path;
+
+    if (!*p) {
+	rb_raise(rb_eNameError, "wrong constant name %s", path);
+    }
+
+    if (p[0] == ':' && p[1] == ':') {
+	mod = rb_cObject;
+	p += 2;
+	pbeg = p;
+    }
+
+    while (*p) {
+	VALUE part;
+
+	while (*p && *p != ':') p++;
+
+	if (pbeg == p) {
+	    rb_raise(rb_eNameError, "wrong constant name %s", path);
+	}
+
+	id = rb_check_id_cstr(pbeg, p-pbeg, enc);
+	if (id) {
+	    part = ID2SYM(id);
+	}
+	else {
+	    part = rb_str_subseq(name, pbeg-path, p-pbeg);
+	}
+	if (p[0] == ':') {
+	    if (p[1] != ':') {
+		rb_raise(rb_eNameError, "wrong constant name %s", path);
+            }
+	    p += 2;
+	    pbeg = p;
+	}
+
+	if (!RB_TYPE_P(mod, T_MODULE) && !RB_TYPE_P(mod, T_CLASS)) {
+	    rb_raise(rb_eTypeError, "%s does not refer to class/module", path);
+	}
+
+        mod = rb_mod_single_const_get(mod, part, recur);
+    }
+
+    return mod;
 }
 
 /*
@@ -2863,6 +2971,7 @@ Init_Object(void)
     rb_define_private_method(rb_cModule, "included", rb_obj_dummy, 1);
     rb_define_private_method(rb_cModule, "extended", rb_obj_dummy, 1);
     rb_define_private_method(rb_cModule, "prepended", rb_obj_dummy, 1);
+    rb_define_private_method(rb_cModule, "used", rb_obj_dummy, 1);
     rb_define_private_method(rb_cModule, "method_added", rb_obj_dummy, 1);
     rb_define_private_method(rb_cModule, "method_removed", rb_obj_dummy, 1);
     rb_define_private_method(rb_cModule, "method_undefined", rb_obj_dummy, 1);
@@ -2950,6 +3059,7 @@ Init_Object(void)
     rb_define_method(rb_cModule, ">=", rb_mod_ge, 1);
     rb_define_method(rb_cModule, "initialize_copy", rb_mod_init_copy, 1); /* in class.c */
     rb_define_method(rb_cModule, "to_s", rb_mod_to_s, 0);
+    rb_define_alias(rb_cModule, "inspect", "to_s");
     rb_define_method(rb_cModule, "included_modules", rb_mod_included_modules, 0); /* in class.c */
     rb_define_method(rb_cModule, "include?", rb_mod_include_p, 1); /* in class.c */
     rb_define_method(rb_cModule, "name", rb_mod_name, 0);  /* in variable.c */
@@ -3002,6 +3112,7 @@ Init_Object(void)
 
     rb_cTrueClass = rb_define_class("TrueClass", rb_cObject);
     rb_define_method(rb_cTrueClass, "to_s", true_to_s, 0);
+    rb_define_alias(rb_cTrueClass, "inspect", "to_s");
     rb_define_method(rb_cTrueClass, "&", true_and, 1);
     rb_define_method(rb_cTrueClass, "|", true_or, 1);
     rb_define_method(rb_cTrueClass, "^", true_xor, 1);
@@ -3014,6 +3125,7 @@ Init_Object(void)
 
     rb_cFalseClass = rb_define_class("FalseClass", rb_cObject);
     rb_define_method(rb_cFalseClass, "to_s", false_to_s, 0);
+    rb_define_alias(rb_cFalseClass, "inspect", "to_s");
     rb_define_method(rb_cFalseClass, "&", false_and, 1);
     rb_define_method(rb_cFalseClass, "|", false_or, 1);
     rb_define_method(rb_cFalseClass, "^", false_xor, 1);

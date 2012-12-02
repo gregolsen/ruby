@@ -65,6 +65,11 @@ module EnvUtil
         stdout = th_stdout.value if capture_stdout
         stderr = th_stderr.value if capture_stderr && capture_stderr != :merge_to_stdout
       else
+        signal = /mswin|mingw/ =~ RUBY_PLATFORM ? :KILL : :TERM
+        begin
+          Process.kill signal, pid
+        rescue Errno::ESRCH
+        end
         raise Timeout::Error
       end
       out_p.close if capture_stdout
@@ -74,11 +79,14 @@ module EnvUtil
       return stdout, stderr, status
     end
   ensure
+    [th_stdout, th_stderr].each do |th|
+      th.kill if th
+    end
     [in_c, in_p, out_c, out_p, err_c, err_p].each do |io|
       io.close if io && !io.closed?
     end
     [th_stdout, th_stderr].each do |th|
-      (th.kill; th.join) if th
+      th.join if th
     end
   end
   module_function :invoke_ruby
@@ -179,15 +187,15 @@ module Test
         assert(status.success?, m)
       end
 
-      def assert_warn(pat, message = nil)
+      def assert_warning(pat, message = nil)
         stderr = EnvUtil.verbose_warning { yield }
         message = ' "' + message + '"' if message
         msg = proc {"warning message #{stderr.inspect} is expected to match #{pat.inspect}#{message}"}
         assert(pat === stderr, msg)
       end
 
-      def assert_warning(*args)
-        assert_warn(*args) {$VERBOSE = false; yield}
+      def assert_warn(*args)
+        assert_warning(*args) {$VERBOSE = false; yield}
       end
 
       def assert_no_memory_leak(args, prepare, code, message=nil, limit: 1.5)
@@ -215,6 +223,32 @@ module Test
 
       def assert_is_minus_zero(f)
         assert(1.0/f == -Float::INFINITY, "#{f} is not -0.0")
+      end
+
+      def assert_file
+        AssertFile
+      end
+
+      class << (AssertFile = Struct.new(:message).new)
+        include Assertions
+        def assert_file_predicate(predicate, *args)
+          if /\Anot_/ =~ predicate
+            predicate = $'
+            neg = " not"
+          end
+          result = File.__send__(predicate, *args)
+          result = !result if neg
+          mesg = "Expected file " << args.shift.inspect
+          mesg << mu_pp(args) unless args.empty?
+          mesg << "#{neg} to be #{predicate}"
+          mesg << " #{message}" if message
+          assert(result, mesg)
+        end
+        alias method_missing assert_file_predicate
+
+        def for(message)
+          clone.tap {|a| a.message = message}
+        end
       end
     end
   end

@@ -2,6 +2,7 @@ require 'test/unit'
 require 'cgi'
 require 'tempfile'
 require 'stringio'
+require_relative '../ruby/envutil'
 
 
 ##
@@ -107,6 +108,7 @@ class CGIMultipartTest < Test::Unit::TestCase
 
   def setup
     ENV['REQUEST_METHOD'] = 'POST'
+    @tempfiles = []
   end
 
   def teardown
@@ -115,11 +117,14 @@ class CGIMultipartTest < Test::Unit::TestCase
     end
     $stdin.close() if $stdin.is_a?(Tempfile)
     $stdin = STDIN
+    @tempfiles.each {|t|
+      t.unlink
+    }
   end
 
   def _prepare(data)
     ## create multipart input
-    multipart = MultiPart.new(@boundary)
+    multipart = MultiPart.new(defined?(@boundary) ? @boundary : nil)
     data.each do |hash|
       multipart.append(hash[:name], hash[:value], hash[:filename])
     end
@@ -133,6 +138,7 @@ class CGIMultipartTest < Test::Unit::TestCase
     ENV['REQUEST_METHOD'] = 'POST'
     ## set $stdin
     tmpfile = Tempfile.new('test_cgi_multipart')
+    @tempfiles << tmpfile
     tmpfile.binmode
     tmpfile << input
     tmpfile.rewind()
@@ -141,7 +147,7 @@ class CGIMultipartTest < Test::Unit::TestCase
 
   def _test_multipart
     caller(0).find {|s| s =~ /in `test_(.*?)'/ }
-    testname = $1
+    #testname = $1
     #$stderr.puts "*** debug: testname=#{testname.inspect}"
     _prepare(@data)
     cgi = RUBY_VERSION>="1.9" ? CGI.new(:accept_charset=>"UTF-8") : CGI.new
@@ -167,6 +173,16 @@ class CGIMultipartTest < Test::Unit::TestCase
       assert_equal(expected, cgi[name].read())
       assert_equal(hash[:filename] || '', cgi[name].original_filename)  #if hash[:filename]
       assert_equal(hash[:content_type] || '', cgi[name].content_type)  #if hash[:content_type]
+    end
+  ensure
+    if cgi
+      cgi.params.each {|name, vals|
+        vals.each {|val|
+          if val.kind_of?(Tempfile) && val.path
+            val.unlink
+          end
+        }
+      }
     end
   end
 
@@ -270,7 +286,7 @@ class CGIMultipartTest < Test::Unit::TestCase
       input2
     end
     ex = assert_raise(EOFError) do
-      cgi = RUBY_VERSION>="1.9" ? CGI.new(:accept_charset=>"UTF-8") : CGI.new
+      RUBY_VERSION>="1.9" ? CGI.new(:accept_charset=>"UTF-8") : CGI.new
     end
     assert_equal("bad content body", ex.message)
     #
@@ -281,7 +297,7 @@ class CGIMultipartTest < Test::Unit::TestCase
       input2
     end
     ex = assert_raise(EOFError) do
-      cgi = RUBY_VERSION>="1.9" ? CGI.new(:accept_charset=>"UTF-8") : CGI.new
+      RUBY_VERSION>="1.9" ? CGI.new(:accept_charset=>"UTF-8") : CGI.new
     end
     assert_equal("bad content body", ex.message)
   end
@@ -314,6 +330,35 @@ class CGIMultipartTest < Test::Unit::TestCase
     cgi = RUBY_VERSION>="1.9" ? CGI.new(:accept_charset=>"UTF-8") : CGI.new
     assert_equal(cgi['foo'], 'bar')
     assert_equal(cgi['file'].read, 'b'*10134)
+    cgi['file'].unlink if cgi['file'].kind_of? Tempfile
+  end
+
+  def test_cgi_multipart_without_tempfile
+    assert_in_out_err([], <<-'EOM')
+      require 'cgi'
+      require 'stringio'
+      ENV['REQUEST_METHOD'] = 'POST'
+      ENV['CONTENT_TYPE'] = 'multipart/form-data; boundary=foobar1234'
+      body = <<-BODY
+--foobar1234
+Content-Disposition: form-data: name=\"name1\"
+
+value1
+--foobar1234
+Content-Disposition: form-data: name=\"file1\"; filename=\"file1.html\"
+Content-Type: text/html
+
+<html>
+<body><p>Hello</p></body>
+</html>
+
+--foobar1234--
+BODY
+      body.gsub!(/\n/, "\r\n")
+      ENV['CONTENT_LENGTH'] = body.size.to_s
+      $stdin = StringIO.new(body)
+      CGI.new
+    EOM
   end
 
   ###

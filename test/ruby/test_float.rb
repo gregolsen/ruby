@@ -155,10 +155,12 @@ class TestFloat < Test::Unit::TestCase
     assert_equal(31.0*2**1019, Float("0x0."+("0"*600)+"1fp3427"))
     assert_equal(-31.0*2**1019, Float("-0x0."+("0"*268)+"1fp2099"))
     assert_equal(-31.0*2**1019, Float("-0x0."+("0"*600)+"1fp3427"))
-    assert_equal(31.0*2**-1027, Float("0x1f"+("0"*268)+".0p-2099"))
-    assert_equal(31.0*2**-1027, Float("0x1f"+("0"*600)+".0p-3427"))
-    assert_equal(-31.0*2**-1027, Float("-0x1f"+("0"*268)+".0p-2099"))
-    assert_equal(-31.0*2**-1027, Float("-0x1f"+("0"*600)+".0p-3427"))
+    suppress_warning do
+      assert_equal(31.0*2**-1027, Float("0x1f"+("0"*268)+".0p-2099"))
+      assert_equal(31.0*2**-1027, Float("0x1f"+("0"*600)+".0p-3427"))
+      assert_equal(-31.0*2**-1027, Float("-0x1f"+("0"*268)+".0p-2099"))
+      assert_equal(-31.0*2**-1027, Float("-0x1f"+("0"*600)+".0p-3427"))
+    end
   end
 
   def test_divmod
@@ -585,6 +587,10 @@ class TestFloat < Test::Unit::TestCase
     assert_equal([5.0, 4.0, 3.0, 2.0], 5.0.step(1.5, -1).to_a)
   end
 
+  def test_step2
+    assert_equal([0.0], 0.0.step(1.0, Float::INFINITY).to_a)
+  end
+
   def test_step_excl
     1000.times do
       a = rand
@@ -599,5 +605,12 @@ class TestFloat < Test::Unit::TestCase
     (1.0 ... e).step(1E-16) do |n|
       assert_operator(n, :<=, e)
     end
+  end
+
+  def test_singleton_method
+    # flonum on 64bit platform
+    assert_raise(TypeError) { a = 1.0; def a.foo; end }
+    # always not flonum
+    assert_raise(TypeError) { a = Float::INFINITY; def a.foo; end }
   end
 end

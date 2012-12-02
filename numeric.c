@@ -100,7 +100,7 @@ static VALUE fix_uminus(VALUE num);
 static VALUE fix_mul(VALUE x, VALUE y);
 static VALUE int_pow(long x, unsigned long y);
 
-static ID id_coerce, id_to_i, id_eq;
+static ID id_coerce, id_to_i, id_eq, id_div;
 
 VALUE rb_cNumeric;
 VALUE rb_cFloat;
@@ -615,12 +615,12 @@ num_to_int(VALUE num)
  */
 
 VALUE
-rb_float_new(double d)
+rb_float_new_in_heap(double d)
 {
-    NEWOBJ(flt, struct RFloat);
-    OBJSETUP(flt, rb_cFloat, T_FLOAT);
+    NEWOBJ_OF(flt, struct RFloat, rb_cFloat, T_FLOAT);
 
     flt->float_value = d;
+    OBJ_FREEZE(flt);
     return (VALUE)flt;
 }
 
@@ -1042,6 +1042,8 @@ num_equal(VALUE x, VALUE y)
  *  Returns <code>true</code> only if <i>obj</i> has the same value
  *  as <i>flt</i>. Contrast this with <code>Float#eql?</code>, which
  *  requires <i>obj</i> to be a <code>Float</code>.
+ *  The result of <code>NaN == NaN</code> is undefined, so the
+ *  implementation-dependent value is returned.
  *
  *     1.0 == 1   #=> true
  *
@@ -1109,6 +1111,8 @@ rb_dbl_cmp(double a, double b)
  *  Returns -1, 0, +1 or nil depending on whether <i>flt</i> is less
  *  than, equal to, or greater than <i>real</i>. This is the basis for
  *  the tests in <code>Comparable</code>.
+ *  The result of <code>NaN <=> NaN</code> is undefined, so the
+ *  implementation-dependent value is returned.
  */
 
 static VALUE
@@ -1153,6 +1157,8 @@ flo_cmp(VALUE x, VALUE y)
  *   flt > real  ->  true or false
  *
  * <code>true</code> if <code>flt</code> is greater than <code>real</code>.
+ * The result of <code>NaN > NaN</code> is undefined, so the
+ * implementation-dependent value is returned.
  */
 
 static VALUE
@@ -1193,6 +1199,8 @@ flo_gt(VALUE x, VALUE y)
  *
  * <code>true</code> if <code>flt</code> is greater than
  * or equal to <code>real</code>.
+ * The result of <code>NaN >= NaN</code> is undefined, so the
+ * implementation-dependent value is returned.
  */
 
 static VALUE
@@ -1232,6 +1240,8 @@ flo_ge(VALUE x, VALUE y)
  *   flt < real  ->  true or false
  *
  * <code>true</code> if <code>flt</code> is less than <code>real</code>.
+ * The result of <code>NaN < NaN</code> is undefined, so the
+ * implementation-dependent value is returned.
  */
 
 static VALUE
@@ -1272,6 +1282,8 @@ flo_lt(VALUE x, VALUE y)
  *
  * <code>true</code> if <code>flt</code> is less than
  * or equal to <code>real</code>.
+ * The result of <code>NaN <= NaN</code> is undefined, so the
+ * implementation-dependent value is returned.
  */
 
 static VALUE
@@ -1313,6 +1325,8 @@ flo_le(VALUE x, VALUE y)
  *  Returns <code>true</code> only if <i>obj</i> is a
  *  <code>Float</code> with the same value as <i>flt</i>. Contrast this
  *  with <code>Float#==</code>, which performs type conversions.
+ *  The result of <code>NaN.eql?(NaN)</code> is undefined, so the
+ *  implementation-dependent value is returned.
  *
  *     1.0.eql?(1)   #=> false
  */
@@ -1720,36 +1734,47 @@ num_truncate(VALUE num)
     return flo_truncate(rb_Float(num));
 }
 
+static double
+ruby_float_step_size(double beg, double end, double unit, int excl)
+{
+    const double epsilon = DBL_EPSILON;
+    double n = (end - beg)/unit;
+    double err = (fabs(beg) + fabs(end) + fabs(end-beg)) / fabs(unit) * epsilon;
+
+    if (isinf(unit)) {
+	return unit > 0 ? beg <= end : beg >= end;
+    }
+    if (err>0.5) err=0.5;
+    if (excl) {
+	if (n<=0) return 0;
+	if (n<1)
+	    n = 0;
+	else
+	    n = floor(n - err);
+    }
+    else {
+	if (n<0) return 0;
+	n = floor(n + err);
+    }
+    return n+1;
+}
 
 int
 ruby_float_step(VALUE from, VALUE to, VALUE step, int excl)
 {
     if (RB_TYPE_P(from, T_FLOAT) || RB_TYPE_P(to, T_FLOAT) || RB_TYPE_P(step, T_FLOAT)) {
-	const double epsilon = DBL_EPSILON;
 	double beg = NUM2DBL(from);
 	double end = NUM2DBL(to);
 	double unit = NUM2DBL(step);
-	double n = (end - beg)/unit;
-	double err = (fabs(beg) + fabs(end) + fabs(end-beg)) / fabs(unit) * epsilon;
+	double n = ruby_float_step_size(beg, end, unit, excl);
 	long i;
 
 	if (isinf(unit)) {
-	    if (unit > 0 ? beg <= end : beg >= end) rb_yield(DBL2NUM(beg));
+	    /* if unit is infinity, i*unit+beg is NaN */
+	    if (n) rb_yield(DBL2NUM(beg));
 	}
 	else {
-	    if (err>0.5) err=0.5;
-	    if (excl) {
-		if (n<=0) return TRUE;
-		if (n<1)
-		    n = 0;
-		else
-		    n = floor(n - err);
-	    }
-	    else {
-		if (n<0) return TRUE;
-		n = floor(n + err);
-	    }
-	    for (i=0; i<=n; i++) {
+	    for (i=0; i<n; i++) {
 		double d = i*unit+beg;
 		if (unit >= 0 ? end < d : d < end) d = end;
 		rb_yield(DBL2NUM(d));
@@ -1760,6 +1785,45 @@ ruby_float_step(VALUE from, VALUE to, VALUE step, int excl)
     return FALSE;
 }
 
+VALUE
+num_interval_step_size(VALUE from, VALUE to, VALUE step, int excl)
+{
+    if (FIXNUM_P(from) && FIXNUM_P(to) && FIXNUM_P(step)) {
+	long delta, diff, result;
+
+	diff = FIX2LONG(step);
+	delta = FIX2LONG(to) - FIX2LONG(from);
+	if (excl) {
+	    delta += (diff > 0 ? -1 : +1);
+	}
+	result = delta / diff;
+	return LONG2FIX(result >= 0 ? result + 1 : 0);
+    }
+    else if (TYPE(from) == T_FLOAT || TYPE(to) == T_FLOAT || TYPE(step) == T_FLOAT) {
+	double n = ruby_float_step_size(NUM2DBL(from), NUM2DBL(to), NUM2DBL(step), excl);
+
+	if (isinf(n)) return DBL2NUM(n);
+	return LONG2FIX(n);
+    }
+    else {
+	VALUE result;
+	ID cmp = RTEST(rb_funcall(step, '>', 1, INT2FIX(0))) ? '>' : '<';
+	if (RTEST(rb_funcall(from, cmp, 1, to))) return INT2FIX(0);
+	result = rb_funcall(rb_funcall(to, '-', 1, from), id_div, 1, step);
+	if (!excl || RTEST(rb_funcall(rb_funcall(from, '+', 1, rb_funcall(result, '*', 1, step)), cmp, 1, to))) {
+	    result = rb_funcall(result, '+', 1, INT2FIX(1));
+	}
+	return result;
+    }
+}
+
+static VALUE
+num_step_size(VALUE from, VALUE args)
+{
+    VALUE to = RARRAY_PTR(args)[0];
+    VALUE step = (RARRAY_LEN(args) > 1) ? RARRAY_PTR(args)[1] : INT2FIX(1);
+    return num_interval_step_size(from, to, step, FALSE);
+}
 /*
  *  call-seq:
  *     num.step(limit[, step]) {|i| block }  ->  self
@@ -1795,7 +1859,7 @@ num_step(int argc, VALUE *argv, VALUE from)
 {
     VALUE to, step;
 
-    RETURN_ENUMERATOR(from, argc, argv);
+    RETURN_SIZED_ENUMERATOR(from, argc, argv, num_step_size);
     if (argc == 1) {
 	to = argv[0];
 	step = INT2FIX(1);
@@ -3339,6 +3403,12 @@ fix_size(VALUE fix)
     return INT2FIX(sizeof(long));
 }
 
+static VALUE
+int_upto_size(VALUE from, VALUE args)
+{
+    return num_interval_step_size(from, RARRAY_PTR(args)[0], INT2FIX(1), FALSE);
+}
+
 /*
  *  call-seq:
  *     int.upto(limit) {|i| block }  ->  self
@@ -3359,7 +3429,7 @@ fix_size(VALUE fix)
 static VALUE
 int_upto(VALUE from, VALUE to)
 {
-    RETURN_ENUMERATOR(from, 1, &to);
+    RETURN_SIZED_ENUMERATOR(from, 1, &to, int_upto_size);
     if (FIXNUM_P(from) && FIXNUM_P(to)) {
 	long i, end;
 
@@ -3378,6 +3448,12 @@ int_upto(VALUE from, VALUE to)
 	if (NIL_P(c)) rb_cmperr(i, to);
     }
     return from;
+}
+
+static VALUE
+int_downto_size(VALUE from, VALUE args)
+{
+    return num_interval_step_size(from, RARRAY_PTR(args)[0], INT2FIX(-1), FALSE);
 }
 
 /*
@@ -3401,7 +3477,7 @@ int_upto(VALUE from, VALUE to)
 static VALUE
 int_downto(VALUE from, VALUE to)
 {
-    RETURN_ENUMERATOR(from, 1, &to);
+    RETURN_SIZED_ENUMERATOR(from, 1, &to, int_downto_size);
     if (FIXNUM_P(from) && FIXNUM_P(to)) {
 	long i, end;
 
@@ -3420,6 +3496,18 @@ int_downto(VALUE from, VALUE to)
 	if (NIL_P(c)) rb_cmperr(i, to);
     }
     return from;
+}
+
+static VALUE
+int_dotimes_size(VALUE num)
+{
+    if (FIXNUM_P(num)) {
+	if (NUM2LONG(num) <= 0) return INT2FIX(0);
+    }
+    else {
+	if (RTEST(rb_funcall(num, '<', 1, INT2FIX(0)))) return INT2FIX(0);
+    }
+    return num;
 }
 
 /*
@@ -3444,7 +3532,7 @@ int_downto(VALUE from, VALUE to)
 static VALUE
 int_dotimes(VALUE num)
 {
-    RETURN_ENUMERATOR(num, 0, 0);
+    RETURN_SIZED_ENUMERATOR(num, 0, 0, int_dotimes_size);
 
     if (FIXNUM_P(num)) {
 	long i, end;
@@ -3598,6 +3686,7 @@ Init_Numeric(void)
     id_coerce = rb_intern("coerce");
     id_to_i = rb_intern("to_i");
     id_eq = rb_intern("==");
+    id_div = rb_intern("div");
 
     rb_eZeroDivError = rb_define_class("ZeroDivisionError", rb_eStandardError);
     rb_eFloatDomainError = rb_define_class("FloatDomainError", rb_eRangeError);
@@ -3660,6 +3749,7 @@ Init_Numeric(void)
     rb_cFixnum = rb_define_class("Fixnum", rb_cInteger);
 
     rb_define_method(rb_cFixnum, "to_s", fix_to_s, -1);
+    rb_define_alias(rb_cFixnum, "inspect", "to_s");
 
     rb_define_method(rb_cFixnum, "-@", fix_uminus, 0);
     rb_define_method(rb_cFixnum, "+", fix_plus, 1);
@@ -3720,6 +3810,7 @@ Init_Numeric(void)
     rb_define_const(rb_cFloat, "NAN", DBL2NUM(NAN));
 
     rb_define_method(rb_cFloat, "to_s", flo_to_s, 0);
+    rb_define_alias(rb_cFloat, "inspect", "to_s");
     rb_define_method(rb_cFloat, "coerce", flo_coerce, 1);
     rb_define_method(rb_cFloat, "-@", flo_uminus, 0);
     rb_define_method(rb_cFloat, "+", flo_plus, 1);

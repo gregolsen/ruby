@@ -240,4 +240,24 @@ EOS
     }
   end
 
+  def test_signame
+    return unless Process.respond_to?(:kill)
+
+    10.times do
+      IO.popen([EnvUtil.rubybin, "-e", <<EOS, :err => File::NULL]) do |child|
+        Signal.trap("INT") do |signo|
+          signame = Signal.signame(signo)
+          Marshal.dump(signame, STDOUT)
+          STDOUT.flush
+          exit 0
+        end
+        Process.kill("INT", $$)
+        sleep 1  # wait signal deliver
+EOS
+
+        signame = Marshal.load(child)
+        assert_equal(signame, "INT")
+      end
+    end
+  end
 end
