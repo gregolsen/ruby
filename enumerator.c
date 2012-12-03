@@ -1312,20 +1312,9 @@ generator_each(int argc, VALUE *argv, VALUE obj)
 
 struct proc_entry {
     VALUE proc;
-    VALUE type;
     VALUE memo;
+    NODE * (*proc_fn)(ANYARGS);
     VALUE (*size_fn)(ANYARGS);
-};
-
-enum proc_entry_type {
-    T_PROC_MAP        = 0,
-    T_PROC_SELECT     = 1,
-    T_PROC_TAKE       = 2,
-    T_PROC_DROP       = 3,
-    T_PROC_TAKE_WHILE = 4,
-    T_PROC_DROP_WHILE = 5,
-    T_PROC_REJECT     = 6,
-    T_PROC_GREP       = 7
 };
 
 static void
@@ -1333,7 +1322,6 @@ proc_entry_mark(void *p)
 {
     struct proc_entry *ptr = p;
     rb_gc_mark(ptr->proc);
-    rb_gc_mark(ptr->type);
     rb_gc_mark(ptr->memo);
 }
 
@@ -1366,76 +1354,27 @@ proc_entry_ptr(VALUE proc_entry) {
 static VALUE
 process_element(VALUE procs_array, VALUE yielder, int argc, VALUE* argv)
 {
-    VALUE result = rb_enum_values_pack(argc, argv);
     struct proc_entry *entry;
     VALUE *procs = RARRAY_PTR(procs_array);
-    VALUE move_next = Qtrue;
-    VALUE break_point = Qfalse;
-    NODE *memo;
     long i = 0;
+    NODE *result;
+
+    result = NEW_MEMO(Qtrue, rb_enum_values_pack(argc, argv), Qfalse);
 
     for (i = 0; i < RARRAY_LEN(procs_array); i++) {
         entry = proc_entry_ptr(procs[i]);
-        if (RTEST(move_next)) {
-            switch ((enum proc_entry_type) entry->type) {
-                case T_PROC_MAP:
-                    result = rb_proc_call_with_block(entry->proc, 1, &result, Qnil);
-                    break;
-                case T_PROC_SELECT:
-                    move_next = rb_proc_call_with_block(entry->proc, 1, &result, Qnil);
-                    break;
-                case T_PROC_TAKE:
-                    memo = RNODE(entry->memo);
-                    if (memo->u3.cnt == 0) {
-                        move_next = Qfalse;
-                        break_point = Qtrue;
-                    } else if (--memo->u3.cnt == 0) {
-                        memo->u3.cnt = memo->u2.argc;
-                        break_point = Qtrue;
-                    }
-                    break;
-                case T_PROC_DROP:
-                    memo = RNODE(entry->memo);
-                    if (memo->u3.cnt-- > 0) {
-                        move_next = Qfalse;
-                    }
-                    break;
-                case T_PROC_TAKE_WHILE:
-                    move_next = rb_proc_call_with_block(entry->proc, 1, &result, Qnil);
-                    if (!RTEST(move_next)) {
-                        move_next = Qfalse;
-                        result = Qundef;
-                        break_point = Qtrue;
-                    }
-                    break;
-                case T_PROC_DROP_WHILE:
-                    memo = RNODE(entry->memo);
-                    if (!memo->u3.state) {
-                        move_next = !RTEST(rb_proc_call_with_block(entry->proc, 1, &result, Qnil));
-                        if (move_next) memo->u3.state = TRUE;
-                    }
-                    break;
-                case T_PROC_REJECT:
-                    move_next = !RTEST(rb_proc_call_with_block(entry->proc, 1, &result, Qnil));
-                    break;
-                case T_PROC_GREP:
-                    move_next = rb_funcall(entry->memo, id_eqq, 1, result);
-
-                    if (RTEST(move_next) && entry->proc) {
-                        result = rb_proc_call_with_block(entry->proc, 1, &result, Qnil);
-                    }
-                    break;
-            }
+        if (RTEST(result->u1.value)) {
+            (*entry->proc_fn)(entry, result);
         }
     }
 
-    if (RTEST(move_next)) {
-        rb_funcall2(yielder, id_yield, 1, &result);
+    if (RTEST(result->u1.value)) {
+        rb_funcall2(yielder, id_yield, 1, &(result->u2.value));
     }
-    if (RTEST(break_point)) {
+    if (RTEST(result->u3.value)) {
         rb_iter_break();
     }
-    return result;
+    return result->u2.value;
 }
 
 static VALUE
@@ -1562,7 +1501,7 @@ lazy_generator_init(VALUE enumerator, VALUE procs)
 }
 
 static VALUE
-create_proc_entry(enum proc_entry_type proc_type, VALUE memo)
+create_proc_entry(VALUE memo, NODE * (*proc_fn)(ANYARGS))
 {
     struct proc_entry *entry;
     VALUE entry_obj;
@@ -1572,19 +1511,19 @@ create_proc_entry(enum proc_entry_type proc_type, VALUE memo)
     if (rb_block_given_p()) {
         entry->proc = rb_block_proc();
     }
-    entry->type = proc_type;
     entry->memo = memo;
+    entry->proc_fn = proc_fn;
 
     return entry_obj;
 }
 
 static VALUE
-lazy_add_proc(VALUE enum_obj, enum proc_entry_type proc_type, VALUE memo)
+lazy_add_proc(VALUE enum_obj, VALUE memo, NODE * (*proc_fn)(ANYARGS))
 {
     struct enumerator *ptr;
     VALUE entry;
 
-    entry = create_proc_entry(proc_type, memo);
+    entry = create_proc_entry(memo, proc_fn);
     ptr = enumerator_ptr(enum_obj);
     rb_ary_push(ptr->procs, entry);
 
@@ -1744,6 +1683,13 @@ lazy_map_size(VALUE entry, VALUE receiver)
     return receiver;
 }
 
+static NODE *
+lazy_map_func(struct proc_entry *entry, NODE *result)
+{
+    result->u2.value = rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil);
+    return result;
+}
+
 static VALUE
 lazy_map(VALUE obj)
 {
@@ -1755,7 +1701,7 @@ lazy_map(VALUE obj)
     }
 
     new_enum = lazy_copy(0, 0, obj);
-    entry = lazy_add_proc(new_enum, T_PROC_MAP, Qnil);
+    entry = lazy_add_proc(new_enum, Qnil, lazy_map_func);
     lazy_proc_entry_set_method(entry, Qnil, lazy_map_size);
 
     return new_enum;
@@ -1825,6 +1771,13 @@ lazy_flat_map(VALUE obj)
 			   Qnil, lazy_receiver_size);
 }
 
+static NODE *
+lazy_select_func(struct proc_entry *entry, NODE *result)
+{
+    result->u1.value = rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil);
+    return result;
+}
+
 static VALUE
 lazy_select(VALUE obj)
 {
@@ -1836,9 +1789,15 @@ lazy_select(VALUE obj)
     }
 
     new_enum = lazy_copy(0, 0, obj);
-    entry = lazy_add_proc(new_enum, T_PROC_SELECT, Qnil);
+    entry = lazy_add_proc(new_enum, Qnil, lazy_select_func);
     lazy_proc_entry_set_method(entry, Qnil, 0);
     return new_enum;
+}
+
+static NODE *
+lazy_reject_func(struct proc_entry *entry, NODE *result) {
+    result->u1.value = !RTEST(rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil));
+    return result;
 }
 
 static VALUE
@@ -1851,9 +1810,19 @@ lazy_reject(VALUE obj)
     }
 
     new_enum = lazy_copy(0, 0, obj);
-    entry = lazy_add_proc(new_enum, T_PROC_REJECT, Qnil);
+    entry = lazy_add_proc(new_enum, Qnil, lazy_reject_func);
     lazy_proc_entry_set_method(entry, Qnil, 0);
     return new_enum;
+}
+
+static NODE *
+lazy_grep_func(struct proc_entry *entry, NODE *result) {
+    result->u1.value = rb_funcall(entry->memo, id_eqq, 1, result->u2.value);
+    if (RTEST(result->u1.value) && entry->proc) {
+        result->u2.value = rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil);
+    }
+
+    return result;
 }
 
 static VALUE
@@ -1862,7 +1831,7 @@ lazy_grep(VALUE obj, VALUE pattern)
     VALUE new_enum, entry;
 
     new_enum = lazy_copy(0, 0, obj);
-    entry = lazy_add_proc(new_enum, T_PROC_GREP, pattern);
+    entry = lazy_add_proc(new_enum, pattern, lazy_grep_func);
     lazy_proc_entry_set_method(entry, rb_ary_new3(1, pattern), 0);
 
     return new_enum;
@@ -1926,6 +1895,19 @@ lazy_take_size(VALUE entry, VALUE receiver)
     return LONG2NUM(len);
 }
 
+static NODE *
+lazy_take_func(struct proc_entry *entry, NODE *result) {
+    NODE *memo = RNODE(entry->memo);
+    if (memo->u3.cnt == 0) {
+        result->u1.value = Qfalse;
+        result->u3.value = Qtrue;
+    } else if (--memo->u3.cnt == 0) {
+        memo->u3.cnt = memo->u2.argc;
+        result->u3.value = Qtrue;
+    }
+    return result;
+}
+
 static VALUE
 lazy_take(VALUE obj, VALUE n)
 {
@@ -1948,10 +1930,21 @@ lazy_take(VALUE obj, VALUE n)
 
     memo = NEW_MEMO(0, len, len);
     new_enum = lazy_copy(argc, argv, obj);
-    entry = lazy_add_proc(new_enum, T_PROC_TAKE, (VALUE) memo);
+    entry = lazy_add_proc(new_enum, (VALUE) memo, lazy_take_func);
     lazy_proc_entry_set_method(entry, rb_ary_new3(1, n), lazy_take_size);
 
     return new_enum;
+}
+
+static NODE *
+lazy_take_while_func(struct proc_entry *entry, NODE *result) {
+    result->u1.value = rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil);
+    if (!RTEST(result->u1.value)) {
+        result->u1.value = Qfalse;
+        result->u2.value = Qundef;
+        result->u3.value = Qtrue;
+    }
+    return result;
 }
 
 static VALUE
@@ -1960,7 +1953,7 @@ lazy_take_while(VALUE obj)
     VALUE new_enum, entry;
 
     new_enum = lazy_copy(0, 0, obj);
-    entry = lazy_add_proc(new_enum, T_PROC_TAKE_WHILE, Qnil);
+    entry = lazy_add_proc(new_enum, Qnil, lazy_take_while_func);
     lazy_proc_entry_set_method(entry, Qnil, 0);
 
     return new_enum;
@@ -1979,6 +1972,15 @@ lazy_drop_size(VALUE proc_entry, VALUE receiver)
     return rb_funcall(receiver, '-', 1, LONG2NUM(len));
 }
 
+static NODE *
+lazy_drop_func(struct proc_entry *entry, NODE *result) {
+    NODE *memo = RNODE(entry->memo);
+    if (memo->u3.cnt-- > 0) {
+        result->u1.value = Qfalse;
+    }
+    return result;
+}
+
 static VALUE
 lazy_drop(VALUE obj, VALUE n)
 {
@@ -1992,10 +1994,20 @@ lazy_drop(VALUE obj, VALUE n)
 
     memo = NEW_MEMO(0, 0, len);
     new_enum = lazy_copy(0, 0, obj);
-    entry = lazy_add_proc(new_enum, T_PROC_DROP, (VALUE) memo);
+    entry = lazy_add_proc(new_enum, (VALUE) memo, lazy_drop_func);
     lazy_proc_entry_set_method(entry, rb_ary_new3(1, n), lazy_drop_size);
 
     return new_enum;
+}
+
+static NODE *
+lazy_drop_while_func(struct proc_entry *entry, NODE* result) {
+    NODE *memo = RNODE(entry->memo);
+    if (!memo->u3.state) {
+        result->u1.value = !RTEST(rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil));
+        if (result->u1.value) memo->u3.state = TRUE;
+    }
+    return result;
 }
 
 static VALUE
@@ -2006,7 +2018,7 @@ lazy_drop_while(VALUE obj)
 
     memo = NEW_MEMO(0, 0, FALSE);
     new_enum = lazy_copy(0, 0, obj);
-    entry = lazy_add_proc(new_enum, T_PROC_DROP_WHILE, (VALUE) memo);
+    entry = lazy_add_proc(new_enum, (VALUE) memo, lazy_drop_while_func);
     lazy_proc_entry_set_method(entry, Qnil, 0);
 
     return new_enum;
