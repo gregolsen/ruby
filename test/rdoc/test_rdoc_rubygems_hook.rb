@@ -1,5 +1,5 @@
-require 'rubygems/test_case'
 require 'rubygems'
+require 'rubygems/test_case'
 require 'rdoc/rubygems_hook'
 
 class TestRDocRubygemsHook < Gem::TestCase
@@ -7,9 +7,12 @@ class TestRDocRubygemsHook < Gem::TestCase
   def setup
     super
 
+    skip 'requires RubyGems 1.9+' unless
+      Gem::Version.new(Gem::VERSION) >= Gem::Version.new('1.9')
+
     @a = quick_spec 'a'
 
-    @rdoc = RDoc::RubygemsHook.new @a
+    @hook = RDoc::RubygemsHook.new @a
 
     begin
       RDoc::RubygemsHook.load_rdoc
@@ -21,8 +24,8 @@ class TestRDocRubygemsHook < Gem::TestCase
   end
 
   def test_initialize
-    assert @rdoc.generate_rdoc
-    assert @rdoc.generate_ri
+    assert @hook.generate_rdoc
+    assert @hook.generate_ri
 
     rdoc = RDoc::RubygemsHook.new @a, false, false
 
@@ -38,7 +41,7 @@ class TestRDocRubygemsHook < Gem::TestCase
       -p
     ]
 
-    @rdoc.delete_legacy_args args
+    @hook.delete_legacy_args args
 
     assert_empty args
   end
@@ -47,24 +50,26 @@ class TestRDocRubygemsHook < Gem::TestCase
     options = RDoc::Options.new
     options.files = []
 
-    @rdoc.instance_variable_set :@rdoc, @rdoc.new_rdoc
-    @rdoc.instance_variable_set :@file_info, []
+    rdoc = @hook.new_rdoc
+    rdoc.store = RDoc::Store.new
+    @hook.instance_variable_set :@rdoc, rdoc
+    @hook.instance_variable_set :@file_info, []
 
-    @rdoc.document 'darkfish', options, @a.doc_dir('rdoc')
+    @hook.document 'darkfish', options, @a.doc_dir('rdoc')
 
-    assert @rdoc.rdoc_installed?
+    assert @hook.rdoc_installed?
   end
 
   def test_generate
     FileUtils.mkdir_p @a.doc_dir
     FileUtils.mkdir_p File.join(@a.gem_dir, 'lib')
 
-    @rdoc.generate
+    @hook.generate
 
-    assert @rdoc.rdoc_installed?
-    assert @rdoc.ri_installed?
+    assert @hook.rdoc_installed?
+    assert @hook.ri_installed?
 
-    rdoc = @rdoc.instance_variable_get :@rdoc
+    rdoc = @hook.instance_variable_get :@rdoc
 
     refute rdoc.options.hyperlink_all
   end
@@ -75,9 +80,9 @@ class TestRDocRubygemsHook < Gem::TestCase
     FileUtils.mkdir_p @a.doc_dir
     FileUtils.mkdir_p File.join(@a.gem_dir, 'lib')
 
-    @rdoc.generate
+    @hook.generate
 
-    rdoc = @rdoc.instance_variable_get :@rdoc
+    rdoc = @hook.instance_variable_get :@rdoc
 
     assert rdoc.options.hyperlink_all
   end
@@ -88,21 +93,35 @@ class TestRDocRubygemsHook < Gem::TestCase
     FileUtils.mkdir_p @a.doc_dir
     FileUtils.mkdir_p File.join(@a.gem_dir, 'lib')
 
-    @rdoc.generate
+    @hook.generate
 
-    rdoc = @rdoc.instance_variable_get :@rdoc
+    rdoc = @hook.instance_variable_get :@rdoc
 
     assert rdoc.options.hyperlink_all
   end
 
+  def test_generate_default_gem
+    skip 'RubyGems 2 required' unless @a.respond_to? :default_gem?
+    @a.loaded_from =
+      File.join Gem::Specification.default_specifications_dir, 'a.gemspec'
+
+    FileUtils.mkdir_p @a.doc_dir
+    FileUtils.mkdir_p File.join(@a.gem_dir, 'lib')
+
+    @hook.generate
+
+    refute @hook.rdoc_installed?
+    refute @hook.ri_installed?
+  end
+
   def test_generate_disabled
-    @rdoc.generate_rdoc = false
-    @rdoc.generate_ri   = false
+    @hook.generate_rdoc = false
+    @hook.generate_ri   = false
 
-    @rdoc.generate
+    @hook.generate
 
-    refute @rdoc.rdoc_installed?
-    refute @rdoc.ri_installed?
+    refute @hook.rdoc_installed?
+    refute @hook.ri_installed?
   end
 
   def test_generate_force
@@ -110,9 +129,9 @@ class TestRDocRubygemsHook < Gem::TestCase
     FileUtils.mkdir_p @a.doc_dir 'rdoc'
     FileUtils.mkdir_p File.join(@a.gem_dir, 'lib')
 
-    @rdoc.force = true
+    @hook.force = true
 
-    @rdoc.generate
+    @hook.generate
 
     assert_path_exists File.join(@a.doc_dir('rdoc'), 'index.html')
     assert_path_exists File.join(@a.doc_dir('ri'),   'cache.ri')
@@ -123,32 +142,32 @@ class TestRDocRubygemsHook < Gem::TestCase
     FileUtils.mkdir_p @a.doc_dir 'rdoc'
     FileUtils.mkdir_p File.join(@a.gem_dir, 'lib')
 
-    @rdoc.generate
+    @hook.generate
 
     refute_path_exists File.join(@a.doc_dir('rdoc'), 'index.html')
     refute_path_exists File.join(@a.doc_dir('ri'),   'cache.ri')
   end
 
   def test_new_rdoc
-    assert_kind_of RDoc::RDoc, @rdoc.new_rdoc
+    assert_kind_of RDoc::RDoc, @hook.new_rdoc
   end
 
   def test_rdoc_installed?
-    refute @rdoc.rdoc_installed?
+    refute @hook.rdoc_installed?
 
     FileUtils.mkdir_p @a.doc_dir 'rdoc'
 
-    assert @rdoc.rdoc_installed?
+    assert @hook.rdoc_installed?
   end
 
   def test_remove
     FileUtils.mkdir_p @a.doc_dir 'rdoc'
     FileUtils.mkdir_p @a.doc_dir 'ri'
 
-    @rdoc.remove
+    @hook.remove
 
-    refute @rdoc.rdoc_installed?
-    refute @rdoc.ri_installed?
+    refute @hook.rdoc_installed?
+    refute @hook.ri_installed?
 
     assert_path_exists @a.doc_dir
   end
@@ -159,7 +178,7 @@ class TestRDocRubygemsHook < Gem::TestCase
     FileUtils.chmod 0, @a.base_dir
 
     e = assert_raises Gem::FilePermissionError do
-      @rdoc.remove
+      @hook.remove
     end
 
     assert_equal @a.base_dir, e.directory
@@ -168,32 +187,37 @@ class TestRDocRubygemsHook < Gem::TestCase
   end
 
   def test_ri_installed?
-    refute @rdoc.ri_installed?
+    refute @hook.ri_installed?
 
     FileUtils.mkdir_p @a.doc_dir 'ri'
 
-    assert @rdoc.ri_installed?
+    assert @hook.ri_installed?
   end
 
   def test_setup
-    @rdoc.setup
+    @hook.setup
 
     assert_path_exists @a.doc_dir
   end
 
   def test_setup_unwritable
     skip 'chmod not supported' if Gem.win_platform?
-    FileUtils.mkdir_p @a.doc_dir
-    FileUtils.chmod 0, @a.doc_dir
+    begin
+      FileUtils.mkdir_p @a.doc_dir
+      FileUtils.chmod 0, @a.doc_dir
 
-    e = assert_raises Gem::FilePermissionError do
-      @rdoc.setup
+      e = assert_raises Gem::FilePermissionError do
+        @hook.setup
+      end
+
+      assert_equal @a.doc_dir, e.directory
+    ensure
+      if File.exist? @a.doc_dir
+        FileUtils.chmod 0755, @a.doc_dir
+        FileUtils.rm_r @a.doc_dir
+      end
     end
-
-    assert_equal @a.doc_dir, e.directory
-  ensure
-    FileUtils.chmod 0755, @a.doc_dir
   end
 
-end if Gem::Version.new(Gem::VERSION) >= Gem::Version.new('1.9')
+end
 

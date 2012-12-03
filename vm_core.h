@@ -333,6 +333,7 @@ typedef struct rb_vm_struct {
     VALUE self;
 
     rb_global_vm_lock_t gvl;
+    rb_thread_lock_t    thread_destruct_lock;
 
     struct rb_thread_struct *main_thread;
     struct rb_thread_struct *running_thread;
@@ -341,7 +342,6 @@ typedef struct rb_vm_struct {
     VALUE thgroup_default;
 
     int running;
-    int inhibit_thread_creation;
     int thread_abort_on_exception;
     int trace_running;
     volatile int sleeper;
@@ -426,7 +426,6 @@ extern const rb_data_type_t ruby_threadptr_data_type;
     TypedData_Get_Struct((obj), rb_thread_t, &ruby_threadptr_data_type, (ptr))
 
 enum rb_thread_status {
-    THREAD_TO_KILL,
     THREAD_RUNNABLE,
     THREAD_STOPPED,
     THREAD_STOPPED_FOREVER,
@@ -459,6 +458,13 @@ struct rb_mutex_struct;
 #define ALT_STACK_SIZE (4*1024)
 #endif
 
+struct rb_thread_struct;
+typedef struct rb_thread_list_struct{
+    struct rb_thread_list_struct *next;
+    struct rb_thread_struct *th;
+} rb_thread_list_t;
+
+
 typedef struct rb_thread_struct {
     VALUE self;
     rb_vm_t *vm;
@@ -473,7 +479,6 @@ typedef struct rb_thread_struct {
 
     /* passing state */
     int state;
-    int yielding;
 
     int waiting_fd;
 
@@ -499,6 +504,7 @@ typedef struct rb_thread_struct {
     /* thread control */
     rb_thread_id_t thread_id;
     enum rb_thread_status status;
+    int to_kill;
     int priority;
 
     native_thread_data_t native_thread_data;
@@ -521,6 +527,7 @@ typedef struct rb_thread_struct {
     VALUE async_errinfo_mask_stack;
 
     rb_atomic_t interrupt_flag;
+    unsigned long interrupt_mask;
     rb_thread_lock_t interrupt_lock;
     struct rb_unblock_callback unblock;
     VALUE locking_mutex;
@@ -546,8 +553,7 @@ typedef struct rb_thread_struct {
     /* storage */
     st_table *local_storage;
 
-    struct rb_thread_struct *join_list_next;
-    struct rb_thread_struct *join_list_head;
+    rb_thread_list_t *join_list;
 
     VALUE first_proc;
     VALUE first_args;
@@ -787,6 +793,7 @@ VALUE rb_vm_invoke_proc(rb_thread_t *th, rb_proc_t *proc,
 			int argc, const VALUE *argv, const rb_block_t *blockptr);
 VALUE rb_vm_make_proc(rb_thread_t *th, const rb_block_t *block, VALUE klass);
 VALUE rb_vm_make_env_object(rb_thread_t *th, rb_control_frame_t *cfp);
+VALUE rb_binding_new_with_cfp(rb_thread_t *th, const rb_control_frame_t *src_cfp);
 void rb_vm_inc_const_missing_count(void);
 void rb_vm_gvl_destroy(rb_vm_t *vm);
 VALUE rb_vm_call(rb_thread_t *th, VALUE recv, VALUE id, int argc,
@@ -802,13 +809,12 @@ void rb_thread_wakeup_timer_thread(void);
 
 int ruby_thread_has_gvl_p(void);
 typedef int rb_backtrace_iter_func(void *, VALUE, int, VALUE);
-rb_control_frame_t *rb_vm_get_ruby_level_next_cfp(rb_thread_t *th, rb_control_frame_t *cfp);
+rb_control_frame_t *rb_vm_get_ruby_level_next_cfp(rb_thread_t *th, const rb_control_frame_t *cfp);
 int rb_vm_get_sourceline(const rb_control_frame_t *);
 VALUE rb_name_err_mesg_new(VALUE obj, VALUE mesg, VALUE recv, VALUE method);
 void rb_vm_stack_to_heap(rb_thread_t *th);
 void ruby_thread_init_stack(rb_thread_t *th);
 
-NOINLINE(void rb_gc_save_machine_context(rb_thread_t *));
 void rb_gc_mark_machine_stack(rb_thread_t *th);
 
 int rb_autoloading_value(VALUE mod, ID id, VALUE* value);
@@ -844,7 +850,7 @@ GET_THREAD(void)
 #define rb_thread_set_current_raw(th) (void)(ruby_current_thread = (th))
 #define rb_thread_set_current(th) do { \
     if ((th)->vm->running_thread != (th)) { \
-	(th)->vm->running_thread->running_time_us = 0; \
+	(th)->running_time_us = 0; \
     } \
     rb_thread_set_current_raw(th); \
     (th)->vm->running_thread = (th); \
@@ -854,10 +860,19 @@ GET_THREAD(void)
 #error "unsupported thread model"
 #endif
 
-#define RUBY_VM_SET_TIMER_INTERRUPT(th)		ATOMIC_OR((th)->interrupt_flag, 0x01)
-#define RUBY_VM_SET_INTERRUPT(th)		ATOMIC_OR((th)->interrupt_flag, 0x02)
-#define RUBY_VM_SET_FINALIZER_INTERRUPT(th)	ATOMIC_OR((th)->interrupt_flag, 0x04)
-#define RUBY_VM_INTERRUPTED(th) ((th)->interrupt_flag & 0x02)
+enum {
+    TIMER_INTERRUPT_MASK	 = 0x01,
+    ASYNC_ERRINFO_INTERRUPT_MASK = 0x02,
+    FINALIZER_INTERRUPT_MASK     = 0x04,
+    TRAP_INTERRUPT_MASK		 = 0x08
+};
+
+#define RUBY_VM_SET_TIMER_INTERRUPT(th)		ATOMIC_OR((th)->interrupt_flag, TIMER_INTERRUPT_MASK)
+#define RUBY_VM_SET_INTERRUPT(th)		ATOMIC_OR((th)->interrupt_flag, ASYNC_ERRINFO_INTERRUPT_MASK)
+#define RUBY_VM_SET_FINALIZER_INTERRUPT(th)	ATOMIC_OR((th)->interrupt_flag, FINALIZER_INTERRUPT_MASK)
+#define RUBY_VM_SET_TRAP_INTERRUPT(th)		ATOMIC_OR((th)->interrupt_flag, TRAP_INTERRUPT_MASK)
+#define RUBY_VM_INTERRUPTED(th) ((th)->interrupt_flag & ~(th)->interrupt_mask & (ASYNC_ERRINFO_INTERRUPT_MASK|TRAP_INTERRUPT_MASK))
+#define RUBY_VM_INTERRUPTED_ANY(th) ((th)->interrupt_flag & ~(th)->interrupt_mask)
 
 int rb_signal_buff_size(void);
 void rb_signal_exec(rb_thread_t *th, int sig);
@@ -875,13 +890,13 @@ void rb_thread_lock_unlock(rb_thread_lock_t *);
 void rb_thread_lock_destroy(rb_thread_lock_t *);
 
 #define RUBY_VM_CHECK_INTS_BLOCKING(th) do { \
-    if (UNLIKELY((th)->interrupt_flag)) { \
+    if (UNLIKELY(RUBY_VM_INTERRUPTED_ANY(th))) { \
 	rb_threadptr_execute_interrupts(th, 1); \
     } \
 } while (0)
 
 #define RUBY_VM_CHECK_INTS(th) do { \
-    if (UNLIKELY((th)->interrupt_flag)) { \
+    if (UNLIKELY(RUBY_VM_INTERRUPTED_ANY(th))) {	\
 	rb_threadptr_execute_interrupts(th, 0); \
     } \
 } while (0)
@@ -895,6 +910,12 @@ typedef struct rb_trace_arg_struct {
     ID id;
     VALUE klass;
     VALUE data;
+
+    int klass_solved;
+
+    /* calc from cfp */
+    int lineno;
+    VALUE path;
 } rb_trace_arg_t;
 
 void rb_threadptr_exec_event_hooks(rb_trace_arg_t *trace_arg);
@@ -910,6 +931,8 @@ void rb_threadptr_exec_event_hooks(rb_trace_arg_t *trace_arg);
 	    trace_arg.id = (id_); \
 	    trace_arg.klass = (klass_); \
 	    trace_arg.data = (data_); \
+	    trace_arg.path = Qundef; \
+	    trace_arg.klass_solved = 0; \
 	    rb_threadptr_exec_event_hooks(&trace_arg); \
 	} \
     } \

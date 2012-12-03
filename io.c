@@ -16,6 +16,7 @@
 #include "ruby/thread.h"
 #include "dln.h"
 #include "internal.h"
+#include "id.h"
 #include <ctype.h>
 #include <errno.h>
 
@@ -727,8 +728,6 @@ flush_before_seek(rb_io_t *fptr)
 # define SEEK_END 2
 #endif
 
-#define FMODE_SYNCWRITE (FMODE_SYNC|FMODE_WRITABLE)
-
 void
 rb_io_check_char_readable(rb_io_t *fptr)
 {
@@ -1128,6 +1127,7 @@ io_binwrite(VALUE str, const char *ptr, long len, rb_io_t *fptr, int nosync)
         fptr->wbuf.capa = IO_WBUF_CAPA_MIN;
         fptr->wbuf.ptr = ALLOC_N(char, fptr->wbuf.capa);
 	fptr->write_lock = rb_mutex_new();
+	rb_mutex_allow_trap(fptr->write_lock, 1);
     }
     if ((!nosync && (fptr->mode & (FMODE_SYNC|FMODE_TTY))) ||
         (fptr->wbuf.ptr && fptr->wbuf.capa <= fptr->wbuf.len + len)) {
@@ -6661,13 +6661,15 @@ io_puts_ary(VALUE ary, VALUE out, int recur)
     if (recur) {
 	tmp = rb_str_new2("[...]");
 	rb_io_puts(1, &tmp, out);
-	return Qnil;
+	return Qtrue;
     }
+    ary = rb_check_array_type(ary);
+    if (NIL_P(ary)) return Qfalse;
     for (i=0; i<RARRAY_LEN(ary); i++) {
 	tmp = RARRAY_PTR(ary)[i];
 	rb_io_puts(1, &tmp, out);
     }
-    return Qnil;
+    return Qtrue;
 }
 
 /*
@@ -6706,9 +6708,7 @@ rb_io_puts(int argc, VALUE *argv, VALUE out)
 	    line = argv[i];
 	    goto string;
 	}
-	line = rb_check_array_type(argv[i]);
-	if (!NIL_P(line)) {
-	    rb_exec_recursive(io_puts_ary, line, out);
+	if (rb_exec_recursive(io_puts_ary, argv[i], out)) {
 	    continue;
 	}
 	line = rb_obj_as_string(argv[i]);
@@ -7580,7 +7580,7 @@ argf_getline(int argc, VALUE *argv, VALUE argf)
   retry:
     if (!next_argv()) return Qnil;
     if (ARGF_GENERIC_INPUT_P()) {
-	line = rb_funcall3(ARGF.current_file, rb_intern("gets"), argc, argv);
+	line = rb_funcall3(ARGF.current_file, idGets, argc, argv);
     }
     else {
 	if (argc == 0 && rb_rs == rb_default_rs) {
@@ -7658,7 +7658,7 @@ rb_f_gets(int argc, VALUE *argv, VALUE recv)
     if (recv == argf) {
 	return argf_gets(argc, argv, argf);
     }
-    return rb_funcall2(argf, rb_intern("gets"), argc, argv);
+    return rb_funcall2(argf, idGets, argc, argv);
 }
 
 /*
@@ -10862,6 +10862,36 @@ argf_each_char(VALUE argf)
 
 /*
  *  call-seq:
+ *     ARGF.codepoints      {|codepoint| block }  -> ARGF
+ *     ARGF.codepoints                       -> an_enumerator
+ *
+ *     ARGF.each_codepoint  {|codepoint| block }  -> ARGF
+ *     ARGF.each_codepoint                   -> an_enumerator
+ *
+ *  Iterates over each codepoint of each file in +ARGF+.
+ *
+ *  This method allows you to treat the files supplied on the command line as
+ *  a single file consisting of the concatenation of each named file. After
+ *  the last codepoint of the first file has been returned, the first
+ *  codepoint of the second file is returned. The +ARGF.filename+ method can
+ *  be used to determine the name of the file in which the current codepoint
+ *  appears.
+ *
+ *  If no block is given, an enumerator is returned instead.
+ */
+static VALUE
+argf_each_codepoint(VALUE argf)
+{
+    RETURN_ENUMERATOR(argf, 0, 0);
+    for (;;) {
+	if (!next_argv()) return argf;
+	rb_block_call(ARGF.current_file, rb_intern("each_codepoint"), 0, 0, 0, 0);
+	ARGF.next_p = 1;
+    }
+}
+
+/*
+ *  call-seq:
  *     ARGF.filename  -> String
  *     ARGF.path      -> String
  *
@@ -11557,9 +11587,11 @@ Init_IO(void)
     rb_define_method(rb_cARGF, "each_line",  argf_each_line, -1);
     rb_define_method(rb_cARGF, "each_byte",  argf_each_byte, 0);
     rb_define_method(rb_cARGF, "each_char",  argf_each_char, 0);
+    rb_define_method(rb_cARGF, "each_codepoint",  argf_each_codepoint, 0);
     rb_define_method(rb_cARGF, "lines", argf_each_line, -1);
     rb_define_method(rb_cARGF, "bytes", argf_each_byte, 0);
     rb_define_method(rb_cARGF, "chars", argf_each_char, 0);
+    rb_define_method(rb_cARGF, "codepoints", argf_each_codepoint, 0);
 
     rb_define_method(rb_cARGF, "read",  argf_read, -1);
     rb_define_method(rb_cARGF, "readpartial",  argf_readpartial, -1);

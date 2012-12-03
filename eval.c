@@ -18,7 +18,7 @@
 #include "ruby/encoding.h"
 #include "internal.h"
 #include "vm_core.h"
-#include "probes.h"
+#include "probes_helper.h"
 
 #define numberof(array) (int)(sizeof(array) / sizeof((array)[0]))
 
@@ -176,6 +176,9 @@ ruby_cleanup(volatile int ex)
 	SAVE_ROOT_JMPBUF(th, ruby_finalize_0());
     }
     POP_TAG();
+
+    /* protect from Thread#raise */
+    th->status = THREAD_KILLED;
 
     errs[0] = th->errinfo;
     PUSH_TAG();
@@ -500,10 +503,10 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg)
     }
 
     if (tag != TAG_FATAL) {
-	if(RUBY_DTRACE_RAISE_ENABLED()) {
+	if (RUBY_DTRACE_RAISE_ENABLED()) {
 	    RUBY_DTRACE_RAISE(rb_obj_classname(th->errinfo),
-		    rb_sourcefile(),
-		    rb_sourceline());
+			      rb_sourcefile(),
+			      rb_sourceline());
 	}
 	EXEC_EVENT_HOOK(th, RUBY_EVENT_RAISE, th->cfp->self, 0, 0, mesg);
     }

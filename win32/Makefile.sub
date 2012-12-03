@@ -232,6 +232,7 @@ LIBS = oldnames.lib user32.lib advapi32.lib shell32.lib ws2_32.lib imagehlp.lib 
 !if !defined(MISSING)
 MISSING = acosh.obj cbrt.obj crypt.obj erf.obj ffs.obj langinfo.obj lgamma_r.obj strlcat.obj strlcpy.obj tgamma.obj win32/win32.obj win32/file.obj setproctitle.obj
 !endif
+DLNOBJ = dln.obj
 
 ARFLAGS = -machine:$(MACHINE) -out:
 CC = $(CC) -nologo
@@ -828,7 +829,7 @@ s,@LINK_SO@,@if exist $$(@).manifest $$(RM) $$(@:/=\).manifest,;t t
 !endif
 s,@COMPILE_C@,$$(CC) $$(INCFLAGS) $$(CFLAGS) $$(CPPFLAGS) $$(COUTFLAG)$$(@) -c -Tc$$(<:\=/),;t t
 s,@COMPILE_CXX@,$$(CXX) $$(INCFLAGS) $$(CXXFLAGS) $$(CPPFLAGS) $$(COUTFLAG)$$(@) -c -Tp$$(<:\=/),;t t
-s,@COMPILE_RULES@,{$$(hdrdir)}.%s.%s: {$$(topdir)}.%s.%s: {$$(srcdir)}.%s.%s: .%s.%s:,;t t
+s,@COMPILE_RULES@,{$$(*VPATH*)}.%s.%s: .%s.%s:,;t t
 s,@RULE_SUBST@,{.;$$(VPATH)}%s,;t t
 s,@TRY_LINK@,$$(CC) -Feconftest $$(INCFLAGS) -I$$(hdrdir) $$(CPPFLAGS) $$(CFLAGS) $$(src) $$(LOCAL_LIBS) $$(LIBS) -link $$(LDFLAGS) $$(LIBPATH) $$(XLDFLAGS),;t t
 s,@COMMON_LIBS@,$(COMMON_LIBS),;t t

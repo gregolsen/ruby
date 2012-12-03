@@ -385,7 +385,7 @@ str_alloc(VALUE klass)
 static inline VALUE
 empty_str_alloc(VALUE klass)
 {
-    if(RUBY_DTRACE_STRING_CREATE_ENABLED()) {
+    if (RUBY_DTRACE_STRING_CREATE_ENABLED()) {
 	RUBY_DTRACE_STRING_CREATE(0, rb_sourcefile(), rb_sourceline());
     }
     return str_alloc(klass);
@@ -400,7 +400,7 @@ str_new(VALUE klass, const char *ptr, long len)
 	rb_raise(rb_eArgError, "negative string size (or size too big)");
     }
 
-    if(RUBY_DTRACE_STRING_CREATE_ENABLED()) {
+    if (RUBY_DTRACE_STRING_CREATE_ENABLED()) {
 	RUBY_DTRACE_STRING_CREATE(len, rb_sourcefile(), rb_sourceline());
     }
 
@@ -932,9 +932,9 @@ rb_str_dup(VALUE str)
 VALUE
 rb_str_resurrect(VALUE str)
 {
-    if(RUBY_DTRACE_STRING_CREATE_ENABLED()) {
-	RUBY_DTRACE_STRING_CREATE(
-            RSTRING_LEN(str), rb_sourcefile(), rb_sourceline());
+    if (RUBY_DTRACE_STRING_CREATE_ENABLED()) {
+	RUBY_DTRACE_STRING_CREATE(RSTRING_LEN(str),
+				  rb_sourcefile(), rb_sourceline());
     }
     return str_replace(str_alloc(rb_cString), str);
 }
@@ -2382,29 +2382,26 @@ rb_str_eql(VALUE str1, VALUE str2)
 static VALUE
 rb_str_cmp_m(VALUE str1, VALUE str2)
 {
-    long result;
+    int result;
 
     if (!RB_TYPE_P(str2, T_STRING)) {
-	if (!rb_respond_to(str2, rb_intern("to_str"))) {
-	    return Qnil;
+	VALUE tmp = rb_check_funcall(str2, rb_intern("to_str"), 0, 0);
+	if (RB_TYPE_P(tmp, T_STRING)) {
+	    result = rb_str_cmp(str1, tmp);
 	}
-	else if (!rb_respond_to(str2, rb_intern("<=>"))) {
+	else if ((tmp = rb_check_funcall(str2, rb_intern("<=>"), 1, &str1)) ==
+		 Qundef) {
 	    return Qnil;
 	}
 	else {
-	    VALUE tmp = rb_funcall(str2, rb_intern("<=>"), 1, str1);
-
 	    if (NIL_P(tmp)) return Qnil;
-	    if (!FIXNUM_P(tmp)) {
-		return rb_funcall(LONG2FIX(0), '-', 1, tmp);
-	    }
-	    result = -FIX2LONG(tmp);
+	    result = -rb_cmpint(tmp, str1, str2);
 	}
     }
     else {
 	result = rb_str_cmp(str1, str2);
     }
-    return LONG2NUM(result);
+    return INT2FIX(result);
 }
 
 /*
@@ -6109,7 +6106,7 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
     VALUE line;
     int n;
     VALUE orig = str;
-    VALUE ary;
+    VALUE UNINITIALIZED_VAR(ary);
 
     if (argc == 0) {
 	rs = rb_rs;
@@ -6303,7 +6300,7 @@ static VALUE
 rb_str_enumerate_bytes(VALUE str, int wantarray)
 {
     long i;
-    VALUE ary;
+    VALUE UNINITIALIZED_VAR(ary);
 
     if (rb_block_given_p()) {
 	if (wantarray) {
@@ -6395,7 +6392,7 @@ rb_str_enumerate_chars(VALUE str, int wantarray)
     long i, len, n;
     const char *ptr;
     rb_encoding *enc;
-    VALUE ary;
+    VALUE UNINITIALIZED_VAR(ary);
 
     if (rb_block_given_p()) {
 	if (wantarray) {
@@ -6492,7 +6489,7 @@ rb_str_enumerate_codepoints(VALUE str, int wantarray)
     unsigned int c;
     const char *ptr, *end;
     rb_encoding *enc;
-    VALUE ary;
+    VALUE UNINITIALIZED_VAR(ary);
 
     if (single_byte_optimizable(str))
 	return rb_str_enumerate_bytes(str, wantarray);

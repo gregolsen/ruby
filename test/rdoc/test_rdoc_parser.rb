@@ -1,14 +1,18 @@
-require 'rubygems'
-require 'minitest/autorun'
-require 'rdoc/parser'
-require 'rdoc/parser/ruby'
-require 'tmpdir'
+# -*- coding: us-ascii -*-
 
-class TestRDocParser < MiniTest::Unit::TestCase
+require 'rdoc/test_case'
+
+class TestRDocParser < RDoc::TestCase
 
   def setup
+    super
+
     @RP = RDoc::Parser
     @binary_dat = File.expand_path '../binary.dat', __FILE__
+
+    @fn = 'file.rb'
+    @top_level = RDoc::TopLevel.new @fn
+    @options = RDoc::Options.new
   end
 
   def test_class_binary_eh_marshal
@@ -29,11 +33,8 @@ class TestRDocParser < MiniTest::Unit::TestCase
   end
 
   def test_class_binary_large_japanese_rdoc
-    extenc, Encoding.default_external = Encoding.default_external, Encoding::US_ASCII
-    file_name = File.expand_path '../test.ja.largedoc', __FILE__
+    file_name = File.expand_path '../test.ja.large.rdoc', __FILE__
     assert !@RP.binary?(file_name)
-  ensure
-    Encoding.default_external = extenc
   end
 
   def test_class_binary_japanese_rdoc
@@ -60,13 +61,34 @@ class TestRDocParser < MiniTest::Unit::TestCase
 
     readme_file_name = File.expand_path '../README', __FILE__
     assert_equal @RP::Simple, @RP.can_parse(readme_file_name)
+  end
 
-    jtest_largerdoc_file_name = File.expand_path '../test.ja.largedoc', __FILE__
-    assert_nil @RP.can_parse(jtest_largerdoc_file_name)
+  def test_class_can_parse_forbidden
+    skip 'chmod not supported' if Gem.win_platform?
 
-    @RP.alias_extension("rdoc", "largedoc")
-    assert_equal @RP::Simple, @RP.can_parse(jtest_largerdoc_file_name)
+    Tempfile.open 'forbidden' do |io|
+      begin
+        File.chmod 0000, io.path
 
+        assert_nil @RP.can_parse io.path
+      ensure
+        File.chmod 0400, io.path
+      end
+    end
+  end
+
+  def test_can_parse_modeline
+    readme_ext = File.join Dir.tmpdir, "README.EXT.#{$$}"
+
+    open readme_ext, 'w' do |io|
+      io.puts "# README.EXT -  -*- rdoc -*- created at: Mon Aug 7 16:45:54 JST 1995"
+      io.puts
+      io.puts "This document explains how to make extension libraries for Ruby."
+    end
+
+    assert_equal RDoc::Parser::Simple, @RP.can_parse(readme_ext)
+  ensure
+    File.unlink readme_ext
   end
 
   ##
@@ -75,6 +97,46 @@ class TestRDocParser < MiniTest::Unit::TestCase
   def test_class_can_parse_zip
     hidden_zip = File.expand_path '../hidden.zip.txt', __FILE__
     assert_nil @RP.can_parse(hidden_zip)
+  end
+
+  def test_check_modeline
+    readme_ext = File.join Dir.tmpdir, "README.EXT.#{$$}"
+
+    open readme_ext, 'w' do |io|
+      io.puts "# README.EXT -  -*- RDoc -*- created at: Mon Aug 7 16:45:54 JST 1995"
+      io.puts
+      io.puts "This document explains how to make extension libraries for Ruby."
+    end
+
+    assert_equal 'rdoc', @RP.check_modeline(readme_ext)
+  ensure
+    File.unlink readme_ext
+  end
+
+  def test_check_modeline_with_other
+    readme_ext = File.join Dir.tmpdir, "README.EXT.#{$$}"
+
+    open readme_ext, 'w' do |io|
+      io.puts "# README.EXT -  -*- mode: RDoc; indent-tabs-mode: nil -*-"
+      io.puts
+      io.puts "This document explains how to make extension libraries for Ruby."
+    end
+
+    assert_equal 'rdoc', @RP.check_modeline(readme_ext)
+  ensure
+    File.unlink readme_ext
+  end
+
+  def test_check_modeline_no_modeline
+    readme_ext = File.join Dir.tmpdir, "README.EXT.#{$$}"
+
+    open readme_ext, 'w' do |io|
+      io.puts "This document explains how to make extension libraries for Ruby."
+    end
+
+    assert_nil @RP.check_modeline(readme_ext)
+  ensure
+    File.unlink readme_ext
   end
 
   def test_class_for_binary
@@ -87,6 +149,93 @@ class TestRDocParser < MiniTest::Unit::TestCase
     def rp.can_parse(*args) nil end
 
     assert_nil @RP.for(nil, @binary_dat, nil, nil, nil)
+  end
+
+  def test_class_for_markup
+    content = <<-CONTENT
+# coding: utf-8 markup: rd
+    CONTENT
+
+    parser = @RP.for @top_level, __FILE__, content, @options, nil
+
+    assert_kind_of @RP::RD, parser
+  end
+
+  def test_class_use_markup
+    content = <<-CONTENT
+# coding: utf-8 markup: rd
+    CONTENT
+
+    parser = @RP.use_markup content
+
+    assert_equal @RP::RD, parser
+  end
+
+  def test_class_use_markup_markdown
+    content = <<-CONTENT
+# coding: utf-8 markup: markdown
+    CONTENT
+
+    parser = @RP.use_markup content
+
+    assert_equal @RP::Ruby, parser
+  end
+
+  def test_class_use_markup_modeline
+    content = <<-CONTENT
+# -*- coding: utf-8 -*-
+# markup: rd
+    CONTENT
+
+    parser = @RP.use_markup content
+
+    assert_equal @RP::RD, parser
+  end
+
+  def test_class_use_markup_modeline_shebang
+    content = <<-CONTENT
+#!/bin/sh
+/* -*- coding: utf-8 -*-
+ * markup: rd
+ */
+    CONTENT
+
+    parser = @RP.use_markup content
+
+    assert_equal @RP::RD, parser
+  end
+
+  def test_class_use_markup_shebang
+    content = <<-CONTENT
+#!/usr/bin/env ruby
+# coding: utf-8 markup: rd
+    CONTENT
+
+    parser = @RP.use_markup content
+
+    assert_equal @RP::RD, parser
+  end
+
+  def test_class_use_markup_tomdoc
+    content = <<-CONTENT
+# coding: utf-8 markup: tomdoc
+    CONTENT
+
+    parser = @RP.use_markup content
+
+    assert_equal @RP::Ruby, parser
+  end
+
+  def test_class_use_markup_none
+    parser = @RP.use_markup ''
+
+    assert_nil parser
+  end
+
+  def test_initialize
+    @RP.new @top_level, @fn, '', @options, nil
+
+    assert_equal @RP, @top_level.parser
   end
 
 end

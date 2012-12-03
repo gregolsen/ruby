@@ -4,7 +4,7 @@ module DTrace
   class TestSingletonFunctionEntry < TestCase
     def test_entry
       probe = <<-eoprobe
-ruby$target:::function-entry
+ruby$target:::method-entry
 /strstr(copyinstr(arg0), "Foo") != NULL/
 {
   printf("%s %s %s %d\\n", copyinstr(arg0), copyinstr(arg1), copyinstr(arg2), arg3);
@@ -13,7 +13,7 @@ ruby$target:::function-entry
 
       trap_probe(probe, ruby_program) { |d_file, rb_file, probes|
 	foo_calls = probes.map { |line| line.split }.find_all { |row|
-	  row.first == '#<Class:Foo>'  && row[1] == 'foo'
+	  row.first == 'Foo'  && row[1] == 'foo'
 	}
 
 	assert_equal 10, foo_calls.length
@@ -25,7 +25,7 @@ ruby$target:::function-entry
 
     def test_exit
       probe = <<-eoprobe
-ruby$target:::function-return
+ruby$target:::method-return
 {
   printf("%s %s %s %d\\n", copyinstr(arg0), copyinstr(arg1), copyinstr(arg2), arg3);
 }
@@ -33,7 +33,7 @@ ruby$target:::function-return
 
       trap_probe(probe, ruby_program) { |d_file, rb_file, probes|
 	foo_calls = probes.map { |line| line.split }.find_all { |row|
-	  row.first == '#<Class:Foo>'  && row[1] == 'foo'
+	  row.first == 'Foo'  && row[1] == 'foo'
 	}
 
 	assert_equal 10, foo_calls.length
@@ -52,4 +52,4 @@ ruby$target:::function-return
       eoruby
     end
   end
-end if (`dtrace -V` rescue false)
+end if defined?(DTrace::TestCase)

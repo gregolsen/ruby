@@ -1,3 +1,1634 @@
+Mon Dec  3 20:37:22 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_exec.c: check VM_COLLECT_USAGE_DETAILS.
+
+Mon Dec  3 20:28:02 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* compile.c (iseq_specialized_instruction):
+	  change condition of using `opt_send_simple'.
+	  More method invocations can be simple.
+
+Mon Dec  3 20:03:38 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* test/ruby/test_objectspace.rb: skip RuntimeError
+	  which says a message "can't modify frozen File".
+	  Is that correct behavior?
+
+Mon Dec 03 20:00:19 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_exec.c: vm_analysis_insn should be static.
+
+Mon Dec  3 19:10:12 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* random.c (Init_Random), rational.c (Init_Rational): make marshal
+	  methods private.  [Feature #6539]
+
+Mon Dec  3 18:29:27 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* iseq.h: iseq_catch_table_entry::catch_type should be
+	  Fixnum because they are pushed into Array in a compiler.
+	  [Bug #7502]
+
+	* test/ruby/test_objectspace.rb: add a test of this issue.
+
+Mon Dec  3 18:25:16 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* template/id.h.tmpl (preserved_ids): "empty?" is not an attribute name.
+
+Mon Dec  3 16:23:09 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_backtrace.c (vm_backtrace_to_ary): check negative size (2nd arg).
+
+Mon Dec  3 15:50:33 2012  Akinori MUSHA  <knu@iDaemons.org>
+
+	* misc/ruby-additional.el (ruby-mode-set-encoding): Unbreak by
+	  fixing a typo, s/set/setq/.
+
+Mon Dec  3 14:14:19 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* compile.c (iseq_compile_each): joke shouldn't use id.h defined ids.
+
+	* id.c (Init_id): ditto.
+
+	* common.mk: fix dpendency.
+
+Mon Dec  3 12:43:35 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* misc/ruby-mode.el (ruby-block-end-re, ruby-delimiter)
+	  (ruby-mode-syntax-table, ruby-parse-partial, ruby-beginning-of-indent):
+	  merge from Emacs.
+
+	* misc/ruby-mode.el (ruby-calculate-indent): fix indentation of
+	  argument lines in parentheses.  [Bug #5140]
+
+Mon Dec  3 07:52:41 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc/parser.rb:  Improved modeline support.  Patch by nobu.
+	* test/rdoc/test_rdoc_parser.rb:  Test for above.
+
+Sun Dec  3 00:06:00 2012  Kenta Murata  <mrkn@mrkn.jp>
+
+	* ext/bigdecimal/bigdecimal.c (BigDecimal_new): stop checking string
+	  taintness.  [Bug #5508] [ruby-core:40510]
+
+Sun Dec  2 19:26:47 2012  Masaya Tarui  <tarui@ruby-lang.org>
+
+	* thread.c (RB_GC_SAVE_MACHINE_CONTEXT, rb_gc_save_machine_context): 
+	  extract rb_gc_save_machine_context to RB_GC_SAVE_MACHINE_CONTEXT.
+	  NOTE: machine_regs and machine_stack_end must be set in current scope.
+
+Sun Dec  2 18:46:24 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* array.c, enum.c, insns.def, io.c, numeric.c, parse.y, process.c,
+	  range.c: use prepared IDs.
+	  A patch from charliesome (Charlie Somerville).
+	  [Bug #7495]
+
+	* common.mk: add dependency to id.h.
+
+	* common.mk: replace ID_H_INCLUDES with id.h.
+
+Sun Dec  2 16:48:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* lib/weakref.rb (rdoc): Clean up usage, add example,
+	  note ArgumentError on WeakRef.new
+
+Sun Dec  2 16:45:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* gc.c (WeakMap): Add doc for internal reference, use lib/weakref.rb
+
+Sun Dec  2 07:24:23 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc/parser.rb:  Parse files with a -*- rdoc -*- modeline
+	* test/rdoc/test_rdoc_parser.rb:  Test for above
+
+Sun Dec  2 06:02:00 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* gc.h (SET_MACHINE_STACK_END): add volatile for preventing
+	  harmful optimization.  [ruby-dev:46665] [Bug #7468]
+
+Sun Dec  2 05:01:58 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* iseq.c (rb_iseq_line_trace_each): iterate `line' event only.
+
+	* test/ruby/test_iseq.rb: add a test for this change.
+
+Sun Dec  2 02:46:04 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_trace.c: add TracePoint#inspect.
+
+	* test/ruby/test_settracefunc.rb: add a test for this change.
+
+Sat Dec  1 21:18:19 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* test/ruby/test_backtrace.rb: add a test for
+	  Thread::Backtrace::Location#inspect.
+	  BTW, tests for `caller_locations' are not enough.
+	  Any volunteers are welcome.
+
+Sat Dec  1 21:06:58 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_backtrace.c (location_inspect_m): add
+	  Thread::Backtrace::Location#inspect.
+	  It same as loc_obj.to_s.inspect.
+
+Sat Dec  1 19:24:09 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* io.c (rb_io_puts): recurse for the argument itself, not converted
+	  array elements.  [ruby-core:42444] [Bug #5986]
+
+Sat Dec  1 19:01:36 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* marshal.c (w_object, r_object0): call private marshal methods.
+	  [Feature #6539]
+
+Sat Dec  1 18:52:22 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/commands/cleanup_command.rb:  Fix cleanup command for
+	  multiple gems.  [ruby-trunk - #7481] by Kouhei Sutou
+	* test/rubygems/test_gem_commands_cleanup_command.rb:  Test for above.
+	* lib/rubygems.rb:  Autoload Gem::Source to prevent test failures
+
+Sat Dec  1 18:17:00 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* complex.c (Init_Complex), time.c (Init_Time): make marshal methods
+	  private.  [Feature #6539]
+
+	* object.c (Init_Object): make remove_instance_variable public.
+	  [Feature #6539]
+
+	* id.c (Init_id), template/id.h.tmpl: add initialize_{copy,clone,dup}
+	  and respond_to_missing?.
+
+	* vm_method.c (rb_method_entry_make): make above methods private.
+	  [Feature #6539]
+
+Sat Dec  1 16:40:22 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* test/ruby/test_thread.rb: move ConditionVariable related test
+	  into test/thread/test_cv.rb.
+	* test/thread/test_cv.rb: new file.
+	* test/thread/test_cv.rb (test_condvar_empty_signal): new tests.
+	* test/thread/test_cv.rb (test_condvar_empty_broadcast): ditto.
+
+Sat Dec  1 15:14:25 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* test/ruby/test_thread.rb (test_cv_wait_deadlock): enable
+	  cv deadlock test.
+
+Sat Dec  1 14:23:33 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* lib/thread.rb (ConditionVariable): use hash instead of array for
+	  @waiters.
+	* test/thread/test_queue.rb (test_sized_queue_and_wakeup): remove
+	  a test because @waiters no longer have a chance to duplicated. Now it's
+	  a hash.
+
+Sat Dec  1 17:16:54 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* misc/ruby-electric.el (ruby-electric-curlies): use kill-region
+	  instead of interactive command delete-backward-char.
+
+Sat Dec  1 17:12:55 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* misc/inf-ruby.el (inferior-ruby-mode): fix the
+	  compilation-shell-minor-mode configuration.  a patch by
+	  j2petkov (Jean-Christophe Petkovich) in [ruby-core:46518].
+	  [Bug #6742]
+
+Sat Dec  1 15:05:30 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* dir.c (glob_helper): use NAMLEN() to tell the length of d_name
+	  instead of strlen(), which can access beyond the boundary.
+
+Sat Dec  1 13:48:13 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/specification.rb:  Don't add default gems to $LOAD_PATH
+	  as they are already there.
+
+Sat Dec  1 12:22:17 2012  Kouhei Sutou  <kou@cozmixng.org>
+
+	* re-added r38053 that is reverted by r38061. Problems by r38053
+	  are resolved by r38096. r38096 removed GEM_SKIP configuration.
+
+	  The below is ChangeLog of r38053:
+
+	* defs/default_gems: Add base directory column.
+
+	* tool/rbinstall.rb:
+	  - Install .gemspecs of default gem to
+	    #{GEM_HOME}/specifications/default/.
+	  - Update files parameter of .gemspecs by relative path from
+	    library directory.
+
+Sat Dec  1 11:09:12 2012  Aaron Patterson <aaron@tenderlovemaking.com>
+
+	* variable.c (rb_class_path_no_cache): add a function to get the class
+	  path without caching the computed path. Some classes are frozen, and
+	  will raise an exception without this.
+
+	* probes.d (cmethod-entry, cmethod-return): separate cmethods from
+	  regular methods to match set trace func.
+
+	* probes_helper.h: refactor macros.  Fix probes to avoid calling
+	  #inspect when profiling.
+
+	* insns.def: update for use with new macros.
+
+	* vm_eval.c: ditto
+
+	* vm_insnhelper.c: ditto
+
+	* test/dtrace/test_singleton_function.rb: fix test for new output.
+
+	* test/dtrace/test_cmethod.rb: test the cmethod probes.
+
+Sat Dec  1 09:44:16 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* test/rdoc/test_rdoc_options.rb:  Windows drive letters are
+	  case-insensitive.
+
+Sat Dec  1 09:42:13 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems.rb:  Search for gem deps file up the directory tree.
+	* test/rubygems/test_gem.rb:  Test for above.
+
+Sat Dec  1 09:33:32 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* test/runner.rb:  Set GEM_HOME, GEM_PATH and GEM_SKIP to empty set.
+	  With default_gem support in RubyGems GEM_SKIP prevents loading of
+          built-in gems.
+
+Sat Dec  1 07:16:17 2012  Hiroshi Shirosaki  <h.shirosaki@gmail.com>
+
+	* compile.c (ADD_CATCH_ENTRY): add a cast to fix SEGV with x64 mingw
+	  on Windows 8. Without cast, 0 might be non zero value at higher bits
+	  in rb_ary_new3().
+	  [ruby-core:50258] [Bug #7456]
+
+Sat Dec  1 04:07:57 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* parse.y (parser.utf8): remove unused property.
+
+	* parse.y (UTF8_ENC): remove unused macro.
+
+	* parse.y (parser_tokadd_utf8): use rb_utf8_encoding() directly.
+
+Sat Dec  1 03:49:45 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* lib/sync.rb (Sync_m#sync_synchronize): add Thread.async_interrupt_timing
+	  for protecting from async interrupt.
+	* lib/sync.rb (Sync_m#sync_lock): ditto.
+
+Sat Dec  1 03:38:04 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* lib/thread.rb (ConditionVariable#broadcast): s/RuntimeError/StandardError/
+	* lib/thread.rb (ConditionVariable#signal): ditto.
+
+Sat Dec  1 03:29:52 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* lib/thread.rb (SizedQueue#pop): rewrite by using ConditionVariable.
+	* lib/thread.rb (SizedQueue#push): ditto.
+	* lib/thread.rb (SizedQueue#max): ditto.
+	* lib/thread.rb (Queue#pop): ditto.
+	* lib/thread.rb (Queue#push): ditto.
+
+	* lib/thread.rb (SizedQueue#num_waiting): adopt the above changes.
+	* lib/thread.rb (SizedQueue#initialize): ditto.
+	* lib/thread.rb (Queue#num_waiting): ditto.
+	* lib/thread.rb (Queue#initialize): ditto.
+	* test/thread/test_queue.rb (test_sized_queue_and_wakeup): ditto.
+
+Sat Dec  1 03:45:47 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* thread.c (Thread.async_interrupt_timing): fix RDoc.
+	  :never is not used any more.
+
+Sat Dec  1 02:56:19 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* iseq.c: add RubyVM::InstructionSequence (ISeq) inspection methods.
+	  * ISeq#path returns path of this ISeq written.
+	  * ISeq#absolute_path returns absolute path.
+	  * ISeq#label returns label (method name and so on).
+	  * ISeq#base_label returns base label (see Thread::Backtrace::Location).
+	  * ISeq#first_lineno returns first line number of this ISeq.
+	  * ISeq.of(obj) returns ISeq object which obj (Proc or Method)
+	    is contains.
+
+	* test/ruby/test_iseq.rb: add tests.
+
+Sat Dec  1 02:58:51 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* include/ruby/ruby.h (rb_event_flag_t):  Maintain integer precision
+	  for clang error (VALUE aka unsigned long vs unsigned int)
+
+Sat Dec  1 02:53:18 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* test/rubygems/test_gem_dependency_installer.rb:  Use Gem.read_binary
+	  instead of File.binread for ruby 1.8 compatibility in the rubygems
+	  source repository.  Updates r38075
+
+Sat Dec  1 02:33:20 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (rb_threadptr_interrupt_mask, async_interrupt_timing_func):
+	  merge into them into rb_thread_s_async_interrupt_timing.
+	* thread.c (rb_thread_s_async_interrupt_timing): ditto.
+
+Sat Dec  1 02:11:47 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (rb_threadptr_interrupt_mask): add argument check.
+	* thread.c (async_interrupt_timing_arg_check_i): helper function
+	  for the above.
+	* test/ruby/test_thread.rb (test_async_interrupt_timing_invalid_argument):
+	  test for the above.
+
+Sat Dec  1 01:19:34 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* lib/thread.rb (ConditionVariable#broadcast): protect from
+	  async interrupt by using Thread.async_interrupt_timing.
+	* lib/thread.rb (ConditionVariable#signal): ditto.
+	* lib/thread.rb (ConditionVariable#wait): ditto.
+
+Sat Dec  1 02:04:23 2012  Kazuhiro NISHIYAMA  <zn@mbf.nifty.com>
+
+	* test/ruby/envutil.rb (Test::Unit::Assertions#assert_in_out_err):
+	  raise if assert_in_out_err misused.
+
+Sat Dec  1 02:08:16 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* test/rdoc/test_rdoc_rubygems_hook.rb
+	  (TestRDocRubygemsHook#test_setup_unwritable): 1. check the existence
+	  of the file(directory) before touch it.  2. remove test
+	  file(directory) after the test.  see [ruby-core:50388].
+
+Sat Dec  1 01:51:06 2012  Koichi Sasada  <ko1@atdot.net>
+
+	[EXPERIMENTAL]
+	* iseq.c: add following two methods.
+	  * ISeq#line_trace_all returns all line traces (line numbers)
+	  * ISeq#line_trace_specify(pos, set) set `pos'th line event to
+	    specified_line event (if set is true).
+	  These features are introduced for debuggers (mainly to make
+	  breakpoint).
+
+	* iseq.h: add decl. of C APIs.
+
+	* test/ruby/test_iseq.rb: add tests.
+
+	* vm_trace.c: add `specified_line' event.
+
+	* include/ruby/ruby.h: ditto.
+
+Sat Dec  1 01:49:52 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* test/rubygems/test_gem_dependency_installer.rb: gems are of course
+	  binary files, so use a binary reading method when reading it.
+	  see [ruby-core:50388].
+
+Sat Dec  1 01:21:07 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* lib/rubygems/command.rb (Gem::Command#get_all_gem_names_and_versions):
+	  who assumes that the pathname of a gem never contains ':' ?
+	  yes, on Unixen pathnames can contain ':', and on Windows they almost
+	  certainly contain ':'.  see [ruby-core:50388].
+
+	* lib/rubygems/requirement.rb (Gem::Requirement::PATTERN_RAW): extract
+	  the regexp to match the version specifier from PATTERN to use in
+	  above method.
+
+Sat Dec  1 00:48:19 2012  Naohisa Goto  <ngotogenome@gmail.com>
+
+	* ext/fiddle/extconf.rb, ext/fiddle/function.c
+	  (Fiddle::Function::STDCALL): FFI_STDCALL is not a macro, but an
+	  enumeration. [ruby-core:50398] [Bug #7483]
+
+Sat Dec  1 00:08:55 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* test/rubygems/test_gem_installer.rb
+	  (TestGemInstaller#test_check_executable_overwrite_other_non_gem):
+	  on Windows, rubygems always generate a wrapper .bat file when
+	  installing a file into bin, so testing no-overwrite a wrapper file
+	  and a non-wrapper file is nonsense.  see [ruby-core:50388].
+
+Fri Nov 30 23:39:58 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* test/rubygems/test_gem_installer.rb
+	  (TestGemInstaller#test_check_executable_overwrite_default_bin_dir):
+	  if the executable to be overwritten was generated by rubygems, the
+	  error message differs from the only copied one's.
+	  see [ruby-core:50388].
+
+Fri Nov 30 23:27:26 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* test/rubygems/test_gem_ext_ext_conf_builder.rb
+	  (TestGemExtExtConfBuilder::test_class_make): reading with binary mode
+	  of course introduce \r on Windows.  see [ruby-core:50388].
+
+Fri Nov 30 23:11:37 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* lib/rubygems/specification.rb
+	  (Gem::Specification.validate_permissions): don't check executability
+	  of the source on Windows.  they will be wrapped to .bat files when
+	  installing.  see [ruby-core:50388].
+
+Fri Nov 30 22:44:14 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* vm_core.h (rb_vm_struct): add thread_destruct_lock field.
+	* thread.c (Init_Thread): ditto.
+	* thread.c (rb_vm_gvl_destroy): ditto.
+
+	* thread.c (thread_start_func_2): make sure vm->running_thread
+	  don't point to dead thread.
+	* thread.c (timer_thread_function): close a race against thread
+	  destruction. [Bug #4911][ruby-dev:43859]
+
+	* vm_core.h (rb_thread_set_current): reset running time of
+	  current thread instead of previous thread. We no longer
+	  assume previous running thread still live.
+
+Fri Nov 30 21:57:43 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* revert r38053 because it causes too many test failures.
+	  if you've already installed r38053 or later, remove the installed
+	  lib/ruby/gems/2.0.0 directory and reinstall this revision or later.
+
+Fri Nov 30 21:07:56 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* lib/test/unit/parallel.rb (Test::Unit::Worker.run): wrap LoadError
+	  because it's Gem::LoadError sometimes.  see [Bug #6882]
+
+Fri Nov 30 20:47:44 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* thread.c: TracePoint#self returns invoking/exiting thread object
+	  at thread_begin/end event.
+
+	* test/ruby/test_settracefunc.rb: fix test.
+
+Fri Nov 30 19:55:17 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* test/ruby/memory_status.rb (Memory::Win32): use fiddle instead of dl,
+	  but I doubt fiddle is not compatible with dl. (if you are interested,
+	  see the diff.)  [ruby-core:50194] [Bug #7443]
+
+Fri Nov 30 19:37:44 2012  Kouhei Sutou  <kou@cozmixng.org>
+
+	* defs/default_gems: Add base directory column.
+
+	* tool/rbinstall.rb:
+	  - Install .gemspecs of default gem to
+	    #{GEM_HOME}/specifications/default/.
+	  - Update files parameter of .gemspecs by relative path from
+	    library directory.
+
+Fri Nov 30 19:30:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* vm_trace.c:
+	  tracepoint_attr_return_value (TracePoint#return_value):
+	    include `:b_return` for method doc
+	  tracepoint_enable_m, tracepoint_disable_m (#enable/#disable):
+	    don't have block argument, document block scope
+
+Fri Nov 30 18:52:56 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_trace.c (tracepoint_disable_m, tracepoint_enable_m):
+	  fix block parameter.
+	  No argument should be given to a block which is passed
+	  to TracePoint#enable (and disable).
+
+Fri Nov 30 18:23:26 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* thread.c: rename Thread.control_interrupt
+	  to Thread.async_interrupt_timing.
+	  The option name `:never' is also changed to  `:defer'.
+	  [ruby-core:50375] [ruby-trunk - Feature #6762]
+
+	* thread.c: remove Thread.check_interrupt.
+	  This method is difficult to understand by name.
+
+	* thread.c: add Thread.async_interrupted?.
+	  This method check any deferred async interrupts.
+
+	* test/ruby/test_thread.rb: change tests for above.
+
+Fri Nov 30 18:24:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* vm_trace.c: Documentation for TracePoint API
+	  [ruby-core:47243] [Feature #6895]
+
+Fri Nov 30 17:43:50 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* string.c (rb_str_cmp_m): try to compare with to_str result if
+	  possible before calling <=> method.  [ruby-core:49279] [Bug #7342]
+
+	* string.c (rb_str_cmp_m): use rb_check_funcall instead of respond_to
+	  and call.
+
+	* string.c (rb_str_cmp_m): return fixed value, one of -1,0,+1 always.
+
+Fri Nov 30 16:19:14 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* vm_dump.c (rb_vm_bugreport): get rid of calling methods in sigsegv
+	  handler.  based on a patch by charliesome (Charlie Somerville)
+	  [ruby-core:49573] [Bug #7402]
+
+Fri Nov 30 16:05:44 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* NEWS:  Added RubyGems 2.0.0
+
+Fri Nov 30 15:24:37 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* parse.y (parser_yylex): fix false usage of local variable, it cannot
+	  appear in fname state [ruby-core:49659] [Bug #7408]
+
+Fri Nov 30 15:20:12 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/package.rb:  Load YAML for building gems.
+	* test/rubygems/test_gem_commands_contents_command.rb:  Sort expected
+	  output of default gem contents.  Re-fixes r38004 and r38005.
+
+Fri Nov 30 15:15:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* vm_trace.c (set_trace_func): Formatting of params and events
+
+Fri Nov 30 14:45:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* lib/net/http.rb: Net::HTTP::Patch to list of HTTP Request Classes
+	  Patch by Ryunosuke SATO [Fixes #217 on github]
+
+Fri Nov 30 14:05:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* lib/cgi.rb: CGI example for HTML generation
+	  Patch by Marcus Stollsteimer [ruby-core:50303] [Bug #7465]
+
+Fri Nov 30 13:52:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* time.c: Documentation improvements, grammar and formatting
+	  Patch by Bernd Homuth [ruby-core:49203] [Bug #7326]
+
+Fri Nov 30 13:48:33 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc.rb:  Set version to 4.0.0.preview2
+	* lib/rubygems.rb:  Set version to 2.0.0.preview2
+
+Fri Nov 30 13:11:53 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/commands/setup_command.rb:  Remove old files on install
+	  of RubyGems.  (not by rbinstall.rb).
+	* test/rubygems/test_gem_commands_setup_command.rb:  Test for above.
+
+Fri Nov 30 12:47:59 2012  Akinori MUSHA  <knu@iDaemons.org>
+
+	* lib/abbrev.rb (Abbrev#abbrev): A fixed string prefix pattern
+	  should only match the beginning of each word, not the beginning
+	  of every line in it.
+
+	* lib/abbrev.rb (Abbrev#abbrev): Stop using a regexp that causes a
+	  false warning. [Bug #7471]
+
+Fri Nov 30 12:30:55 2012  Akinori MUSHA  <knu@iDaemons.org>
+
+	* test/test_abbrev.rb: Add tests for lib/abbrev.rb.
+
+Fri Nov 30 12:27:51 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/spec_fetcher.rb:  Allow prerelease spec fetching to fail
+	  for bundler.
+	* test/rubygems/test_gem_spec_fetcher.rb:  Test for above.
+
+Fri Nov 30 12:20:53 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rake/backtrace.rb:  Removed duplication in
+	  Rake::Backtrace::SUPPRESSED_PATHS
+	* test/rake/test_rake_backtrace.rb:  Skip tests when tmpdir is in the
+	  suppressed pattern.
+
+Fri Nov 30 11:07:45 2012  Shugo Maeda  <shugo@ruby-lang.org>
+
+	* revert r37993 to avoid SEGV in tests.
+
+Fri Nov 30 10:38:54 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc/ri/driver.rb:  Relaxed matching for pages to be more
+	  user-friendly.
+	* test/rdoc/test_rdoc_ri_driver.rb:   Test for above.
+
+Fri Nov 30 09:50:16 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc/markdown.rb:  Fixed warnings with -w
+
+Fri Nov 30 09:38:22 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* include/ruby/ruby.h (RB_GC_GUARD_PTR): add note.
+
+	* vm_backtrace.c (backtrace_to_str_ary): use RB_GC_GUARD() instead of
+	  RB_GC_GUARD_PTR() which has no effect.
+	  (backtrace_to_location_ary): ditto.
+	  (vm_backtrace_to_ary): ditto.
+
+Fri Nov 30 09:22:52 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/commands/contents_command.rb:  Sort output from command.
+	  Replaces r38004, r38005
+	* test/rubygems/test_gem_commands_contents_command.rb:  ditto.
+
+	* lib/rubygems/defaults.rb:  Use Gem.path_separator for jruby support.
+	* lib/rubygems/path_support.rb:  ditto
+
+Fri Nov 30 08:34:03 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc/generator/darkfish.rb:  Silenced warning
+	* test/rdoc/test_rdoc_rdoc.rb:  ditto
+
+	* lib/rdoc/markup/parser.rb:  Use byteslice when available for
+	  performance
+	* test/rdoc/test_rdoc_markup_parser.rb:  Test for above
+	* lib/rdoc/test_case.rb:  ditto
+
+	* lib/rdoc/parser/ruby.rb:  Fixed bug parsing yield({})
+	* test/rdoc/test_rdoc_parser_ruby.rb (end):
+
+	* lib/rdoc/rubygems_hook.rb:  Skip default gems.  Display generator
+	  name properly.
+	* test/rdoc/test_rdoc_rubygems_hook.rb:  Test for above
+
+	* lib/rdoc/servlet.rb:  Fixed typo.
+
+Fri Nov 30 08:09:56 2012  Narihiro Nakamura  <authornari@gmail.com>
+
+	* gc.c : remove a unused function.
+
+Fri Nov 30 07:46:42 2012  Narihiro Nakamura  <authornari@gmail.com>
+
+	* gc.c (rb_objspace_call_finalizer): finalize_deferred may free up
+	  a object which is reachable from a part after this function,
+	  e.g. ruby_vm_destruct(). [ruby-dev:46647] [Bug #7452]
+
+	* test/ruby/test_gc.rb (test_finalizing_main_thread): add a test
+	  for above.
+
+Fri Nov 30 07:43:44 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* thread.c (rb_thread_interrupted): avoid warning of
+	  implicit conversion.
+
+	* thread.c (rb_threadptr_execute_interrupts): ditto.
+
+Fri Nov 30 07:34:28 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_backtrace.c: add GC guards.
+
+Fri Nov 30 07:21:33 2012  Koichi Sasada  <ko1@atdot.net>
+
+	[EXPERIMENTAL: NEED DISCUSS]
+	* vm_trace.c: add events
+	  * :thread_begin - hook at thread beginning.
+	  * :thread_end - hook at thread ending.
+	  * :b_call - hook at block enter.
+	  * :b_return - hook at block leave.
+	  This change slow down block invocation.
+	  Please try and give us feedback until 2.0 code freeze.
+
+	* include/ruby/ruby.h: ditto.
+
+	* compile.c (rb_iseq_compile_node): ditto.
+
+	* insns.def: ditto.
+
+	* thread.c: ditto.
+
+	* vm.c: ditto.
+
+	* include/ruby/debug.h: add a comment.
+
+	* test/ruby/test_settracefunc.rb: add a tests.
+
+Fri Nov 30 06:56:30 2012  Ryan Davis  <ryand-ruby@zenspider.com>
+
+	* test/minitest/*: Imported minitest 4.3.2 (r8027)
+
+Fri Nov 30 04:16:29 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rake/*:  Updated to rake 0.9.5
+	* test/rake/*:  ditto.
+	* NEWS:  ditto.
+
+Fri Nov 30 02:53:47 2012  Aaron Patterson <aaron@tenderlovemaking.com>
+
+	* vm.c: add a return hook when a method raises an exception.
+
+	* probes_helper.h: look up klass and method if none are provided.
+
+	* eval.c: update macro usage.
+
+	* vm_eval.c: ditto.
+
+	* vm_insnhelper.c: ditto.
+
+	* test/dtrace/test_function_entry.rb: test for change.
+
+Fri Nov 30 02:27:12 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* compile.c (compile_array_): refix r37991 remove assertion:
+	  it is true only if type == COMPILE_ARRAY_TYPE_HASH.
+	  [ruby-dev:46658] [Bug #7466]
+
+	* vm.c (m_core_hash_from_ary): add assertion instead of above.
+
+	* vm.c (m_core_hash_merge_ary): ditto.
+
+Thu Nov 29 19:15:14 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* compile.c (compile_array_): hash elements must be paired even for
+	  literal elements.  [ruby-dev:46658] [Bug #7466]
+
+Thu Nov 29 22:39:35 2012  Naohisa Goto  <ngotogenome@gmail.com>
+
+	* ext/openssl/ossl_ssl.c (ssl_npn_encode_protocol_i): fix byte order
+	  issue on big-endian architecture [ruby-core:50292] [Bug #7463]
+
+Thu Nov 29 22:23:31 2012  Hiroshi Nakamura  <nahi@ruby-lang.org>
+
+	* test/openssl/test_cipher.rb (test_ctr_if_exists): add CTR mode test
+	  if underlying OpenSSL supports it. See #4408
+
+Thu Nov 29 21:42:16 2012  Shugo Maeda  <shugo@ruby-lang.org>
+
+	* vm_method.c (rb_method_entry_make): add a method entry with
+	  VM_METHOD_TYPE_REFINED to the class refined by the refinement if
+	  the target module is a refinement.  When a method entry with
+	  VM_METHOD_TYPE_UNDEF is invoked by vm_call_method(), a method with
+	  the same name is searched in refinements.  If such a method is
+	  found, the method is invoked.  Otherwise, the original method in
+	  the refined class (rb_method_definition_t::body.orig_def) is
+	  invoked.  This change is made to simplify the normal method lookup
+	  and to improve the performance of normal method calls.
+
+	* vm_method.c (EXPR1, search_method, rb_method_entry),
+	  vm_eval.c (rb_call0, rb_search_method_entry): do not use
+	  refinements for method lookup.
+
+	* vm_insnhelper.c (vm_call_method): search methods in refinements if
+	  ci->me is VM_METHOD_TYPE_REFINED.  If the method is called by
+	  super (i.e., ci->call == vm_call_super_method), skip the same
+	  method entry as the current method to avoid infinite call of the
+	  same method.
+
+	* class.c (include_modules_at): add a refined method entry for each
+	  method defined in a module included in a refinement.
+
+	* class.c (rb_prepend_module): set an empty table to
+	  RCLASS_M_TBL(klass) to add refined method entries, because
+	  refinements should have priority over prepended modules.
+
+	* proc.c (mnew): use rb_method_entry_with_refinements() to get
+	  a refined method.
+
+	* test/ruby/test_refinement.rb (test_inline_method_cache): do not skip
+	  the test because it should pass successfully.
+
+	* test/ruby/test_refinement.rb (test_redefine_refined_method): new
+	  test for the case a refined method is redefined.
+
+Thu Nov 29 17:45:10 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* variable.c (rb_const_set): show namespace in warning messages.
+	  [Feature #7190]
+
+Thu Nov 29 17:31:53 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* lib/rubygems.rb (Gem.load_yaml): return if Kernel#gem is not defined
+	  yet. This causes crash if test-all requires libraries in a certain
+	  order. A simple reproducible code is
+	  ruby --disable-gem -e'require"yaml";require"minitest/autorun"'
+
+Thu Nov 29 17:19:26 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/tracer.rb:  Updated to match removal of custom_require from
+	  RubyGems.
+	* test/test_tracer.rb:  ditto.  Improved failure message if the test
+	  fails
+
+Thu Nov 29 17:15:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* gc.c: Documentation for GC, GC::Profiler, ObjectSpace, and
+	  ObjectSpace::WeakMap [ruby-core:50245] [Bug #7449]
+
+Thu Nov 29 17:12:26 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* tool/generic_erb.rb, tool/id2token.rb: add --path-separator option
+	  for mingw where make and built ruby live in different world.
+
+	* tool/vpath.rb: extract from tool/instruction.rb.
+
+Thu Nov 29 17:11:06 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* test/io/wait/test_io_wait.rb (TestIOWait#fill_pipe):
+	  Errno::EWOULDBLOCK may not be the same as Errno::EAGAIN.  patch by
+	  phasis68 (Heesob Park) at [ruby-core:49894].  [Bug #7420]
+
+Thu Nov 29 17:03:38 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/test_case.rb:  Determine path to certificates to avoid
+	  build-dir problems.
+	* test/rubygems/test_gem_security_signer.rb:  Use predetermined paths
+	  to avoid build-dir problems.
+
+Thu Nov 29 16:18:14 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems/test_case.rb:  Disable loading of keys and certificates
+	  outside rubygems or ruby tests as the files are not available (or
+	  necessary).
+
+Thu Nov 29 16:14:41 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_backtrace.c (rb_debug_inspector_open): use RARRAY_LENINT() for
+	  int variable.
+
+Thu Nov 29 15:59:55 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* include/ruby/debug.h: add rb_debug_inspector_* APIs.
+
+	* vm_backtrace.c: ditto.
+
+	* common.mk: add dependency from vm_backtrace.o to
+	  include/ruby/debug.h.
+
+	* proc.c (rb_binding_new_with_cfp): constify.
+
+	* vm.c (rb_vm_get_ruby_level_next_cfp): constify.
+
+	* vm_core.h, vm_trace.c: move decls.
+
+Thu Nov 29 15:56:14 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* lib/rdoc/test_case.rb (RDoc::TestCase#verbose_capture_io):
+	  defined for asserts of warnings.
+
+	* test/rdoc: use verbose_capture_io on asserts of warnings.
+	  they failed when tests was run with RUBYOPT=-W0.
+
+Thu Nov 29 15:53:38 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* ext/psych/extconf.rb: added --enable-bundled-libyaml option.  this
+	  enforces using bundled libyaml.
+
+Thu Nov 29 15:51:54 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rubygems*:  Updated to RubyGems 2.0
+	* test/rubygems*:  ditto.
+
+	* common.mk (prelude):  Updated for RubyGems 2.0 source rearrangement.
+
+	* tool/change_maker.rb:  Allow invalid UTF-8 characters in source
+	  files.
+
+Thu Nov 29 15:38:14 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* include/ruby/debug.h: provide rb_tracearg_*() APIs,
+	  instead of rb_tracepoint_attr_*().
+	  These APIs are for debuggers/profilers.
+	  They will be explained in another docs sometime.
+
+	* vm_trace.c: ditto.
+
+Thu Nov 29 15:10:45 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* test/minitest/test_minitest_unit.rb: restore orig_verbose only
+	  if it is set. This broke rdoc's tests.
+	  http://u64.rubyci.org/~chkbuild/ruby-trunk/log/20121129T050102Z.diff.html.gz
+
+Thu Nov 29 14:56:30 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_trace.c (rb_tracepoint_attr_method_id):
+	  rename TracePoint#id to TracePoint#method_id.
+
+	* include/ruby/debug.h: ditto.
+
+	* test/ruby/test_settracefunc.rb: ditto,
+
+Thu Nov 29 14:49:10 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_trace.c (rb_tracepoint_attr_defined_class):
+	  rename TracePoint#klass to TracePoint#defined_class.
+	  [ruby-core:50187] Re: [ruby-trunk - Feature #6895]
+
+	* include/ruby/debug.h: ditto.
+
+	* test/ruby/test_settracefunc.rb: ditto.
+
+Thu Nov 29 14:27:57 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_stat): prepare Symbol objects at first time
+	  to make it fast.
+
+Thu Nov 29 14:02:15 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* gc.c (gc_stat): GC.stat supports new information
+	  * total_allocated_object: total allocated object number.
+	  * total_freed_object: total freed object number.
+	  Above two numbers are only accumulated and they will
+	  overflow (return to 0). Please use them as a hint.
+
+Thu Nov 29 12:13:54 2012  Ryan Davis  <ryand-ruby@zenspider.com>
+
+	* lib/minitest/*: Imported minitest 4.3.2 (r8026)
+	* test/minitest/*: ditto
+
+Thu Nov 29 11:06:06 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (thread_start_func_2): remove unused code. When
+	  th->safe_level == 4, th->errinfo never be thrown. So, to
+	  create new exception makes no sense.
+
+Thu Nov 29 10:29:53 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_backtrace.c: same as a last patch.
+
+Thu Nov 29 10:24:25 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_backtrace.c: use `long' for return values of `NUM2LONG()'.
+
+Thu Nov 29 09:52:08 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* thread.c (do_select): suppress warning (uninitialized value warning)
+	  with UNINITIALIZED_VAR().
+
+Thu Nov 29 09:36:09 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* eval.c (ruby_cleanup): delay THREAD_KILLED timing.
+	  It should be located just before rb_thread_terminate_all().
+
+Thu Nov 29 09:10:17 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_backtrace.c (vm_backtrace_to_ary): support range argument
+	  like Array#[].
+	  [ruby-core:50092] [ruby-trunk - Feature #7434]
+	  Test and document is not available. Please help us.
+
+Thu Nov 29 06:46:33 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (thread_start_func_2): small cleanups.
+
+Thu Nov 29 06:37:08 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (thread_start_func_2): remove unused code.
+	  this function never be used for main thread.
+
+Thu Nov 29 06:27:55 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (thread_start_func_2): remove unused code.
+	  errinfo = th->errinfo; and errinfo = rb_errinfo(); are
+	  the same.
+
+Thu Nov 29 05:26:32 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_backtrace.c (backtrace_to_str_ary2): rename to backtrace_to_str_ary.
+
+	* vm_backtrace.c (rb_backtrace_to_str_ary): use `backtrace_to_str_ary()'.
+
+	* vm_backtrace.c (backtrace_to_frame_ary): rename to
+	  backtrace_to_location_ary.
+
+Thu Nov 29 05:19:25 2012  Aaron Patterson <aaron@tenderlovemaking.com>
+
+	* probes.d: Change function-entry probe to method-entry.
+	* insns.def: ditto
+	* probes_helper.h: ditto
+	* test/dtrace/test_function_entry.rb: ditto
+	* test/dtrace/test_singleton_function.rb: ditto
+	* vm.c: ditto
+	* vm_eval.c: ditto
+	* vm_insnhelper.c: ditto
+
+Thu Nov 29 04:45:17 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_backtrace.c: rename Class name from
+	  ::RubyVM::Backtrace and ::RubyVM::Backtrace::Location
+	  to ::Thread::Backtrace and ::Thread::Backtrace::Location.
+
+Wed Nov 28 23:52:02 2012  Masaya Tarui  <tarui@ruby-lang.org>
+
+	* NEWS (Thread) remove incompatible changes about trap.
+
+Wed Nov 28 23:39:01 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* thread.c (rb_mutex_sleep): fix to allow spurious wakeup.
+	  [ruby-dev:46654] [ruby-trunk - Bug #7455]
+
+	* NEWS: write about spurious wakeup.
+
+Wed Nov 28 22:57:23 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* thread_win32.c: catch up latest change of BLOCKING_REGION.
+
+Wed Nov 28 22:54:21 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_insnhelper.c (vm_call_method): fix undefined behavior.
+	  Should not access scope local variable from outer scope.
+
+Wed Nov 28 22:20:55 2012  Masaya Tarui  <tarui@ruby-lang.org>
+
+	* test/ruby/test_thread.rb (test_thread_status_in_trap): change test for
+	  thread status in trap. now can accept Thread#join and Thread#value in trap.
+
+Wed Nov 28 21:58:47 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* include/ruby/thread.h (rb_thread_call_without_gvl2): change
+	  meaning of function.
+	  This function is called with same parameters of
+	  `rb_thread_call_without_gvl()'.
+	  However, if interrupts are detected, then return immediately.
+
+	* thread.c: implement `rb_thread_call_without_gvl2()'.
+
+Wed Nov 28 21:31:21 2012  Masaya Tarui  <tarui@ruby-lang.org>
+
+	* thread.c (thread_join_sleep): check spurious wakeup by itself for
+	corresponding status change in trap context.
+	* vm_core.h (struct rb_thread_struct): add rb_thread_list_t and use as join_list for
+	reentry by trap context.
+	* thread.c (thread_start_func_2): ditto.
+	* thread.c (remove_from_join_list): ditto.
+	* thread.c (rb_thread_atfork): ditto.
+	* thread.c (thread_join): ditto. & remove trap handler check.
+	* thread.c (sleep_forever): add argument : spurious_check.
+	* thread.c (sleep_timeval): ditto.
+	* thread.c (rb_thread_sleep_forever): set spurious_check.
+	* thread.c (rb_thread_sleep_deadly): ditto.
+	* thread.c (sleep_for_polling): ditto.
+	* thread.c (rb_thread_wait_for): ditto.
+	* thread.c (sleep_wait_for_interrupt): bypass spurious_check.
+
+Wed Nov 28 21:23:18 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/psych/yaml/emitter.c (yaml_emitter_write_indicator): constify.
+
+	* ext/psych/yaml/emitter.c (yaml_emitter_write_block_scalar_hints):
+	  ditto.
+
+	* ext/psych/extconf.rb: mingw32 also needs macros for win32, not
+	  only mswin32.
+
+	* ext/psych/extconf.rb: compile sources in the source directory
+	  without copying by using VPATH.
+
+Wed Nov 28 21:18:57 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* lib/mkmf.rb (MakeMakefile#each_compile_rules): splat $(*VPATH*) for
+	  each VPATH elements.
+
+Wed Nov 28 16:40:14 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* vm_core.h (enum rb_thread_status): remove THREAD_TO_KILL
+	* vm_core.h (struct rb_thread_struct): add to_kill field
+	* thread.c (terminate_i): convert THREAD_TO_KILL to to_kill.
+	* thread.c (rb_threadptr_to_kill): ditto.
+	* thread.c (rb_thread_kill): ditto.
+	* thread.c (rb_thread_wakeup_alive): ditto.
+	* thread.c (thread_list_i): ditto.
+	* thread.c (static const char): ditto.
+	* thread.c (thread_status_name): ditto.
+	* thread.c (rb_thread_status): ditto.
+	* thread.c (rb_thread_inspect): ditto.
+	* vm_backtrace.c (thread_backtrace_to_ary): ditto.
+
+	* thread.c (rb_threadptr_execute_interrupts): fix thread status
+	  overwritten issue. [Bug #7450] [ruby-core:50249]
+
+	* test/ruby/test_thread.rb (test_hread_status_raise_after_kill):
+	  test for the above.
+	* test/ruby/test_thread.rb (test_thread_status_in_trap): test for
+	  thread status in trap.
+	* test/ruby/test_thread.rb (test_status_and_stop_p): remove
+	  Thread.control_interrupt unsafe test. Thread#kill no longer
+	  changes thread status. Instead of, Thread#kill receiver changes
+	  their own status when receiving kill signal.
+
+Wed Nov 28 16:21:46 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (struct rb_mutex_struct): add allow_trap field.
+	* internal.h (rb_mutex_allow_trap): added.
+	* thread.c (rb_mutex_lock, rb_mutex_unlock): check mutex->allow_trap.
+	* thread.c (mutex_sleep): remove trap check because it uses
+	  rb_mutex_lock and rb_mutex_unlock internally.
+	* thread.c (rb_mutex_allow_trap): new helper function for the above.
+
+	* io.c (io_binwrite): mark fptr->write_lock as writable in trap.
+
+	* test/ruby/test_signal.rb (test_trap_puts): test for the above.
+
+Wed Nov 28 16:59:12 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* proc.c: remove Proc#== and Proc#eql?.
+	  Proc objects compared with their object ids.
+	  [Bug #4559]
+
+	* test/ruby/test_proc.rb: remove related test.
+
+Wed Nov 28 16:41:04 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc/servlet.rb:  Add support for serving documentation from a
+	  subdirectory.
+	* lib/rdoc/generator/darkfish.rb:  ditto
+	* test/rdoc/test_rdoc_servlet.rb:  Test for above
+	* test/rdoc/test_rdoc_servlet.rb:  ditto
+
+Wed Nov 28 15:37:17 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* configure.in: fix r37294: run only on i[3-6]86-linux.
+
+Wed Nov 28 15:31:11 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* io.c (FMODE_SYNCWRITE): removed unused macro.
+
+Wed Nov 28 15:19:25 2012  Naohisa Goto  <ngotogenome@gmail.com>
+
+	* configure.in: revert r37911, r37906 and r37904 which break build
+	  with non-gcc and/or non-IA32 compilers, e.g. Solaris Studio,
+	  Fujitsu C Compiler. [ruby-dev:46646] [Bug #7451]
+
+Wed Nov 28 14:50:55 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* ext/psych/extconf.rb: copy sources into build directory,
+	  not into srcdir.
+
+Wed Nov 28 14:34:06 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (rb_mutex_lock): moved trap context check from
+	  rb_mutex_trylock because try_lock have no change to make
+	  a deadlock.
+	* thread.c (rb_mutex_trylock): ditto.
+	* NEWS: news for the above.
+
+Wed Nov 28 13:39:54 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (thread_s_new): uses main_thread->status instead of
+	  th->inhibit_thread_creation for preventing thread creation.
+	* vm_core.h (rb_vm_struct): remove inhibit_thread_creation field.
+	* thread.c (rb_thread_terminate_all): ditto.
+
+Wed Nov 28 13:27:29 2012  Aaron Patterson <aaron@tenderlovemaking.com>
+
+	* ext/psych/extconf.rb: use embedded libyaml if no system libyaml is
+	  found. [ruby-core:49463]
+	* ext/psych/lib/psych.rb: updating to psych 2.0.0
+	* ext/psych/lib/psych/deprecated.rb: updated docs
+	* ext/psych/psych.gemspec: updated to psych 2.0.0
+	* ext/psych/psych.h: fixing header file include for rename
+	* ext/psych/psych_emitter.c: renamed to avoid libyaml conflict.
+	* ext/psych/psych_emitter.h: ditto
+	* ext/psych/psych_parser.c: ditto
+	* ext/psych/psych_parser.h: ditto
+	* ext/psych/psych_to_ruby.c: ditto
+	* ext/psych/psych_to_ruby.h: ditto
+	* ext/psych/psych_yaml_tree.c: ditto
+	* ext/psych/psych_yaml_tree.h: ditto
+	* ext/psych/yaml/LICENSE: embedding libyaml 0.1.4
+	* ext/psych/yaml/api.c: ditto
+	* ext/psych/yaml/config.h: ditto
+	* ext/psych/yaml/dumper.c: ditto
+	* ext/psych/yaml/emitter.c: ditto
+	* ext/psych/yaml/loader.c: ditto
+	* ext/psych/yaml/parser.c: ditto
+	* ext/psych/yaml/reader.c: ditto
+	* ext/psych/yaml/scanner.c: ditto
+	* ext/psych/yaml/writer.c: ditto
+	* ext/psych/yaml/yaml.h: ditto
+	* ext/psych/yaml/yaml_private.h: ditto
+
+Wed Nov 28 12:54:59 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (thread_join): A trap handler check was moved from
+	  thread_join_m because Thread#value should be raised an exception
+	  too.
+	* thread.c (thread_join_m): remove trap handler check.
+	* test/ruby/test_thread.rb (test_thread_join_in_trap): add test
+	  for thread#value.
+	* NEWS: documentation fix for the above.
+
+Wed Nov 28 11:07:00 2012  Zachary Scott  <zachary@zacharyscott.net>
+
+	* ext/fiddle/closure.c: Documentation for Fiddle
+	* ext/fiddle/lib/fiddle/import.rb: ditto
+	* ext/fiddle/lib/fiddle/value.rb: ditto
+	* ext/fiddle/lib/fiddle/pack.rb: ditto
+	* ext/fiddle/lib/fiddle/cparser.rb: ditto
+	* ext/fiddle/lib/fiddle/struct.rb: ditto
+	* ext/fiddle/lib/fiddle/function.rb: ditto
+
+Wed Nov 28 09:15:51 2012  Ryan Davis  <ryand-ruby@zenspider.com>
+
+	* ext/strscan/strscan.c: Added #charpos for multibyte string position.
+	* test/strscan/test_stringscanner.rb: ditto
+
+Wed Nov 28 09:00:34 2012  Aaron Patterson <aaron@tenderlovemaking.com>
+
+	* ext/fiddle/fiddle.c: adding alignment constants for compatibility
+	  with DL.
+	* ext/fiddle/fiddle.h: ditto
+	* ext/fiddle/lib/fiddle/cparser.rb: importing the C parser for DL
+	  backwards compatibility.
+	* ext/fiddle/lib/fiddle/import.rb: importing the import DSL for DL
+	  backwards compatibility.
+	* ext/fiddle/lib/fiddle/pack.rb: importing structure pack for DL
+	  backwards compatibility.
+	* ext/fiddle/lib/fiddle/value.rb: ditto
+	* ext/fiddle/lib/fiddle/struct.rb: importing struct DSL for DL backwards
+	  compatibility.
+	* test/dl/test_c_struct_entry.rb: importing tests
+	* test/dl/test_c_union_entity.rb: ditto
+	* test/dl/test_cparser.rb: ditto
+	* test/dl/test_import.rb: ditto
+	* test/fiddle/test_c_struct_entry.rb: ditto
+	* test/fiddle/test_c_union_entity.rb: ditto
+	* test/fiddle/test_cparser.rb: ditto
+	* test/fiddle/test_import.rb: ditto
+
+Wed Nov 28 08:56:00 2012  Zachary Scott <zachary@zacharyscott.net>
+
+	* doc/globals.rdoc: Add documentation file for magic globals
+	[ruby-core:29048] [Bug #3022]
+
+Wed Nov 28 08:55:00 2012  Zachary Scott <zachary@zacharyscott.net>
+
+	* .document: Add README's to be included with docs
+
+Wed Nov 28 08:26:00 2012  Zachary Scott <zachary@zacharyscott.net>
+
+	* ext/dl/lib/dl.rb: Deprecation notice for DL
+
+Wed Nov 28 08:25:00 2012  Zachary Scott <zachary@zacharyscott.net>
+
+	* ext/fiddle/closure.c: Documentation for Fiddle
+	* ext/fiddle/pointer.c: ditto
+	* ext/fiddle/function.c: ditto
+	* ext/fiddle/lib/fiddle.rb: ditto
+	* ext/fiddle/fiddle.c: ditto
+	* ext/fiddle/handle.c: ditto
+
+Wed Nov 28 04:53:40 2012  Aaron Patterson <aaron@tenderlovemaking.com>
+
+	* ext/fiddle/handle.c: Make Fiddle independent of DL, copy DL::Handle
+	  to Fiddle::Handle.
+	* ext/fiddle/pointer.c: Make Fiddle independent of DL, copy
+	  DL::Pointer to Fiddle::Pointer.
+	* test/fiddle/test_func.rb: relevant tests
+	* test/fiddle/test_handle.rb: ditto
+	* test/fiddle/test_pointer.rb: ditto
+	* ext/dl/lib/dl/struct.rb: use Fiddle::Pointer if available
+	* ext/fiddle/extconf.rb: check for dlfcn.h
+	* ext/fiddle/fiddle.c: add constants for sizeof() things
+	* ext/fiddle/fiddle.h: include dlfcn.h
+	* ext/fiddle/function.c: expose a C function for creating new
+	  Fiddle::Function objects.
+	* ext/fiddle/lib/fiddle.rb: include constants for dl backwards compat
+	* ext/fiddle/lib/fiddle/function.rb: read the pointer from the
+	  function for dl backwards compat.
+	* test/dl/test_callback.rb: check the addresses of the pointers rather
+	  than their types.
+	* test/fiddle/helper.rb: remove dependency on dl
+	* test/fiddle/test_closure.rb: ditto
+	* test/fiddle/test_fiddle.rb: ditto
+
+Wed Nov 28 03:03:28 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* configure.in (opt-dir): don't use non portable flag -E of sed.
+
+Wed Nov 28 02:55:35 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* configure.in (ARCH_FLAG): __sync_val_compare_and_swap_4 needs
+	  -march=$target_cpu on at least linux gcc 4.1.
+	  patched by KOSAKI Motohiro
+
+Tue Nov 27 22:03:09 2012  Akinori MUSHA  <knu@iDaemons.org>
+
+	* string.c (rb_str_enumerate_chars, rb_str_enumerate_codepoints)
+	  (rb_str_enumerate_lines): Dummy initialization of ary has been
+	  replaced with UNINITIALIZED_VAR().
+
+Tue Nov 27 21:29:00 2012  Kenta Murata  <mrkn@mrkn.jp>
+
+	* bignum.c (bigdivrem): optimize the way to retry calculation of
+	  bigdivrem so that the calculation is started from the point where
+	  the last interruption was occurred.
+
+	* bignum.c (bigdivrem1): ditto.
+
+	* test/ruby/test_bignum.rb: add a test case for rb_bigdivrem in the
+	  case that an interruption is occurred during bigdivrem1 is running.
+
+Tue Nov 27 19:56:43 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm.c (rb_vm_make_env_object): make Proc object if Env is possible
+	  to point block.
+	  [ruby-core:41038] [ruby-trunk - Bug #5634]
+
+	* vm.c (rb_vm_make_proc): No need to make Proc object here.
+
+	* bootstraptest/test_proc.rb: add tests.
+
+Tue Nov 27 18:51:06 2012  Naohisa Goto  <ngotogenome@gmail.com>
+
+	* ruby_atomic.h (ATOMIC_CAS): added for Solaris and other platforms.
+	* ruby_atomic.h, signal.c (NEED_RUBY_ATOMIC_OPS): renamed from
+	  NEED_RUBY_ATOMIC_EXCHANGE.
+	* signal.c (ruby_atomic_compare_and_swap): naive, non-atomic
+	  compare-and-swap implementation only used for platforms without
+	  valid support for atomic operations.
+
+Tue Nov 27 17:43:46 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc/*:  Added --root option for building documentation outside
+	  the source directory.
+	* test/rdoc/*:  ditto
+	* common.mk (rdoc):  Added --root to rdoc rule
+
+Tue Nov 27 16:24:45 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* test/rdoc/test_rdoc_ri_paths.rb:  Fixed duplicate path bug which
+	  caused windows failures.
+
+Tue Nov 27 16:06:00 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* test/rdoc/test_rdoc_generator_darkfish.rb:  Updated tests for windows
+	* test/rdoc/test_rdoc_options.rb:  ditto
+	* test/rdoc/test_rdoc_parser.rb:  ditto
+	* test/rdoc/test_rdoc_rdoc.rb:  ditto
+	* test/rdoc/test_rdoc_ri_driver.rb:  ditto
+	* test/rdoc/test_rdoc_servlet.rb:  ditto
+
+Tue Nov 27 15:13:51 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* common.mk (rdoc):  Set --debug for rdoc generation in case of bugs
+
+Tue Nov 27 14:56:45 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc/rubygems_hook.rb:  Updated for (upcoming) RubyGems 2
+	  import.
+	* test/rdoc/test_rdoc_rubygems_hook.rb:  ditto
+
+Tue Nov 27 13:59:29 2012  Narihiro Nakamura  <authornari@gmail.com>
+
+	* NEWS: add improvements of the garbage collector.
+
+Tue Nov 27 13:27:46 2012  Eric Hodel  <drbrain@segment7.net>
+
+	* lib/rdoc*:  Updated to RDoc 4.0 (pre-release)
+	* bin/rdoc:  ditto
+	* test/rdoc*:  ditto
+	* NEWS:  Updated with RDoc 4.0 information
+
+Tue Nov 27 12:17:11 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* thread.c (rb_thread_terminate_all): retry broadcast only when
+	  an exception is raised.
+
+Tue Nov 27 12:02:25 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* thread.c (rb_thread_terminate_all): broadcast terminate event
+	  not only an interrupt exception but any exceptions.
+
+Tue Nov 27 10:55:09 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* eval.c (ruby_cleanup): set thread status to THREAD_KILLED
+	  for preventing thr.raise.
+	* test/ruby/test_thread.rb (test_main_thread_status_at_exit):
+	  test for the above.
+
+Tue Nov 27 10:31:29 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (rb_thread_terminate_all): suppress a warning.
+
+Tue Nov 27 09:29:11 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (thread_join): raises ThreadError if target thread
+	  is a main thread.
+	* test/ruby/test_thread.rb (test_thread_join_main_thread):
+	  test for the above.
+	* NEWS: news for the above.
+
+Tue Nov 27 09:24:47 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (thread_join): raises ThreadError if target thread
+	  is a current thread.
+	* test/ruby/test_thread.rb (test_thread_join_current):
+	  test for the above.
+	* NEWS: news for the above.
+
+Tue Nov 27 09:59:16 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/extmk.rb (extmake): close mkmf.log for each libraries so that
+	  failure messages are not mixed.
+
+Tue Nov 27 09:58:48 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/digest/*/extconf.rb, ext/openssl/extconf.rb: get git rid of
+	  post-1.8 feature require_relative for cross compilation.
+	  [ruby-core:50160] [Bug #7439]
+
+Tue Nov 27 09:17:59 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* NEWS: add TracePoint.
+
+Tue Nov 27 08:16:03 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_trace.c: rename TracePoint#file and TracePoint#line
+	  to TracePoint#path and TracePoint#lineno respectively.
+	  They are consistent to RubyVM::Backtrace::Location.
+
+	* include/ruby/debug.h: ditto.
+
+	* vm_core.h: ditto.
+
+	* test/ruby/test_settracefunc.rb: ditto.
+
+Tue Nov 27 08:04:26 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (rb_thread_terminate_all): broadcast eTerminateSignal
+	  again when Ctrl-C was pressed. [Feature #1952] [ruby-dev:39107]
+
+Tue Nov 27 07:58:03 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* vm_core.h: add members to rb_trace_arg_t:
+	  * `klass_solved' represents klass and id is checked.
+	  * `line' represents line calculated from cfp.
+	  * `file' represents line calculated from cfp.
+
+	* vm_trace.c: fix to use above data structures.
+	  No need to calculate klass and id, line and file
+	  pairs for each trace points.
+
+Tue Nov 27 07:47:09 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (rb_thread_terminate_all): add RUBY_VM_CHECK_INTS_BLOCKING().
+	  Otherwise the loop in this function behave as busy loop because
+	  native_sleep() return immediately when RUBY_VM_INTERRUPTED() is true.
+
+Tue Nov 27 04:12:49 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/extmk.rb (extmake): git rid of post-1.8 features for cross
+	  compilation.  [ruby-core:50160] [Bug #7439]
+
+Tue Nov 27 00:13:41 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (rb_mutex_trylock, rb_mutex_unlock, mutex_sleep):
+	  raises ThreadError if called from trap handler as Thread#join.
+	* NEWS: news for the above.
+
+Mon Nov 26 23:55:33 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* NEWS: update for Thread#join incompatible change.
+
+Mon Nov 26 22:44:24 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (rb_thread_terminate_all): use native_sleep() instead
+	  of rb_thread_schedule(). Otherwise, it consume 100% cpu meaninglessly.
+	  [Bug #5368] [ruby-dev:44546]
+	* thread.c (thread_start_func_2): last sub-thread wakes up main thread.
+
+Mon Nov 26 21:16:04 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* vm_core.h (RUBY_VM_SET_TIMER_INTERRUPT, RUBY_VM_SET_INTERRUPT)
+	(RUBY_VM_SET_FINALIZER_INTERRUPT, RUBY_VM_SET_TRAP_INTERRUPT)
+	(RUBY_VM_INTERRUPTED): use enum symbol instead of immediate value.
+	* thread.c (thread_join_m, rb_threadptr_execute_interrupts): ditto.
+	* signal.c (signal_exec): ditto.
+
+Mon Nov 26 20:23:20 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* thread.c (thread_join_m): use th->interrupt_mask instead of
+	  th->in_trap.
+
+	* vm_core.h (struct rb_thread_struct): remove in_trap member.
+	* signal.c (signal_exec): ditto.
+	* thread.c (thread_create_core): ditto.
+	* thread.c (Init_Thread): ditto.
+
+Mon Nov 26 20:23:49 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* test/ruby/test_argf.rb (TestArgf#test_chars): since marshal data is
+	  binary, shouldn't pass via text mode.  use base64 encoded data.
+
+Mon Nov 26 19:45:18 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* ruby_atomic.h (ATOMIC_CAS): new macro for compare-and-exchange.
+
+	* vm_core.h (struct rb_thread_struct): add interrupt_mask member.
+	* thread.c (thread_create_core, Init_Thread): initialize
+	  th->thread_mask.
+
+	* vm_core.h (RUBY_VM_INTERRUPTED_ANY): new macro for avoiding
+	  bare th->interrupt_flag.
+	* vm_core.h (RUBY_VM_INTERRUPTED, RUBY_VM_INTERRUPTED): check
+	  th->interrupt_mask.
+	* thread.c (set_unblock_function, rb_thread_schedule): replace
+	  th->interrupt_flag with RUBY_VM_INTERRUPTED_ANY()
+
+	* signal.c (signal_exec): set up thread->interrupt_mask for
+	  preventing recursive trap handler.
+	* vm_core.h (RUBY_VM_CHECK_INTS, RUBY_VM_CHECK_INTS_BLOCKING): ditto.
+
+	* thread.c (rb_threadptr_execute_interrupts):
+	  don't process interrupt if it is masked.
+	  [Bug #6009] [ruby-core:42524]
+
+Mon Nov 26 19:43:42 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* iseq.c (make_compile_option_value): add trace_instruction option.
+	  a patch by davidbalbert (David Albert).
+	  [Bug #6786]
+
+Mon Nov 26 19:10:53 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* bootstraptest/test_thread.rb: try to `join' each 100
+	  threads.
+	  This benchmark seems consuming long time on travis-ci
+	  several times (and make `failure').
+
+Mon Nov 26 18:22:56 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* common.mk: specify label `built-ruby'.
+
+	* benchmark/driver.rb: quote path.
+
+Mon Nov 26 18:26:28 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* signal.c (signal_exec): add volatile to make sure setjmp safe.
+
+Mon Nov 26 18:19:47 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* signal.c (signal_exec): suppress "warning: variable 'signum'
+	  might be clobbered by 'longjmp' or 'vfork'" warning.
+
+Mon Nov 26 18:15:47 2012  Koichi Sasada  <ko1@atdot.net>
+
+	* benchmark/driver.rb: accept multiple `-e'.
+	  You don't need to use `;' separation character.
+	  [ruby-core:50139] [ruby-trunk - Bug #7380]
+
+Mon Nov 26 17:10:04 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* string.c (rb_str_enumerate_chars, rb_str_enumerate_codepoints)
+	(rb_str_enumerate_lines): suppress "may be used uninitialized in
+	  this function" warning.
+
+Mon Nov 26 17:00:12 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* vm_core.h (rb_thread_struct): added 'in_trap' member for marking
+	  running trap handler.
+	* signal.c (signal_exec): turn on in_trap when running trap.
+	* thread.c (Init_Thread, thread_create_core): initialize in_trap
+	  when creating new threads.
+	* thread.c (thread_join_m): raise ThreadError when running trap
+	  handler.Bug [#6416][ruby-core:44956]
+	* test/ruby/test_thread.rb (test_thread_join_in_trap): new test
+	  for the above.
+
+Mon Nov 26 16:36:13 2012  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* io.c (argf_each_codepoint): add missing ARGF#codepoints [Bug #7438]
+
+Mon Nov 26 15:50:29 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* bignum.c (bigdivrem): restart calculation when bigdivrem1 was
+	  interrupted by signal. Otherwise, ruby script may see a garbage
+	  value.
+
+Mon Nov 26 15:33:02 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* bignum.c (big_div_struct): added volatile to 'stop' member.
+	  Otherwise, "if (bds->stop)" check in bigdivrem1 don't read
+	  memory and ignore interrupt.
+	* bignum.c (bigdivrem, rb_big_stop): ditto.
+
+Mon Nov 26 12:11:09 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* win32/Makefile.sub (DLNOBJ): missing in r37821.
+
+Mon Nov 26 10:50:19 2012  KOSAKI Motohiro  <kosaki.motohiro@gmail.com>
+
+	* test/ruby/test_process.rb (test_setsid): added a few wait for
+	  preventing that Process.getsid(io.pid) makes Errno::ESRCH.
+
+Sun Nov 25 22:34:00 2012  Hiroshi Shirosaki  <h.shirosaki@gmail.com>
+
+	* array.c (ary_resize_smaller): new function to resize array.
+
+	* array.c (rb_ary_delete): refactoring to extract a function.
+
+	* array.c (rb_ary_delete_same): refactoring.
+	  It renames function, reduces duplicated code and removes unused
+	  code.
+
+	* gc.c (wmap_final_func): follow the above change.
+
+	* internal.h (rb_ary_delete_same): ditto.
+
+Sun Nov 25 22:27:33 2012  Benoit Daloze  <eregontp@gmail.com>
+
+	* array.c: fixes for the updated documentation in r35858:
+	  Typos and #take/#drop accept to take/drop 0 elements.
+
 Sun Nov 25 19:43:29 2012  Kazuki Tsujimoto  <kazuki@callcc.net>
 
 	* NEWS: add a news about iconv.
@@ -129,7 +1760,7 @@ Sat Nov 24 00:00:10 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 Fri Nov 23 23:44:41 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* lib/mkmf.rb (MakeMakefile#pkg_config): strip all white spaces for
-	  mingw64+MSYS pkg-config which errouneously emits extra newlines.
+	  mingw64+MSYS pkg-config which erroneously emits extra newlines.
 	  [ruby-core:47998] [Bug #7163]
 
 Fri Nov 23 17:31:54 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
@@ -3082,7 +4713,7 @@ Fri Oct  5 17:18:42 JST 2012  TAKANO Mitsuhiro  <tak@no32.tk>
 	  HTML_ALIGN_MEMBERS lines. They have been obsolete in
 	  Doxygen version 1.8.2.
 
-Fri Oct 05 15:26:18 2012  Koichi Sasada  <ko1@atdot.net>
+Fri Oct  5 15:26:18 2012  Koichi Sasada  <ko1@atdot.net>
 
 	* ext/objspace/objspace.c: add ObjectSpace#reachable_objects_from.
 	  This method returns an array of objects referenced by given object.
@@ -4683,7 +6314,7 @@ Tue Aug  7 20:19:29 2012  NARUSE, Yui  <naruse@ruby-lang.org>
 	  back. Without this, on FreeBSD9 and readline 6.2 irb can't catch ^C.
 	  [Bug #5423]
 
-Tue Aug 07 20:12:39 2012  Koichi Sasada  <ko1@atdot.net>
+Tue Aug  7 20:12:39 2012  Koichi Sasada  <ko1@atdot.net>
 
 	* vm_exec.c, insns.def (leave): solve problems on
 	  OPT_CALL_THREADED_CODE.
@@ -7400,7 +9031,7 @@ Thu Jun  7 20:29:12 2012  Tanaka Akira  <akr@fsij.org>
 	* include/ruby/intern.h: rb_exec_arg and related stuff moved back from
 	  internal.h
 
-Thu Jun 07 15:53:03 2012  Koichi Sasada  <ko1@atdot.net>
+Thu Jun  7 15:53:03 2012  Koichi Sasada  <ko1@atdot.net>
 
 	* .gdbinit: add function `trace_machine_instructions' to trace
 	  in native machine assemble.
@@ -8824,7 +10455,7 @@ Mon May  7 21:19:17 2012  NARUSE, Yui  <naruse@ruby-lang.org>
 	* ext/json: Merge JSON 1.7.1.
 	  https://github.com/flori/json/commit/e5b9a9465c1159fae533bca320d950b772bcb4ac
 
-Mon May 07 22:54:22 2012  Martin Bosslet  <Martin.Bosslet@googlemail.com>
+Mon May  7 22:54:22 2012  Martin Bosslet  <Martin.Bosslet@googlemail.com>
 
 	* ext/openssl/ossl_ssl.c: add support for option flags
 	  OpenSSL::SSL::OP_NO_TLSv1_1
@@ -8890,7 +10521,7 @@ Mon May  7 10:16:30 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 	* test/rubygems/test_gem_installer.rb (TestGemInstaller#test_dir): fix
 	  argument order.  expected value must come first.
 
-Mon May 07 09:14:11 2012  Martin Bosslet  <Martin.Bosslet@googlemail.com>
+Mon May  7 09:14:11 2012  Martin Bosslet  <Martin.Bosslet@googlemail.com>
 
 	* ext/openssl/ossl_ssl.c: support TLSv1.1 & TLSv1.2. Add
 	  SSLContext#version to inspect the version that was negotiated for
@@ -9065,22 +10696,6 @@ Sun Apr 29 06:12:02 2012  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* vm.c (m_core_hash_merge_kwd): merge keyword hash into intermediate
 	  hash.  leftward argument is prior currently.
-
-Sat Apr 28 18:39:40 2012  Koichi Sasada  <ko1@atdot.net>
-
-	* vm_core.h (rb_thread_t#yielding): add a field.
-
-	* thread.c (rb_thread_schedule_limits): set th#yielding while
-	  release GVL to yield CPU time.
-
-	* thread.c (timer_thread_function): skip timer interrupt when
-	  th#yielding is true.  This patch fixes r35480.
-
-	* thread.c (rb_threadptr_execute_interrupts_common): revert
-	  a patch of r35480.
-
-	* ChangeLog: add an extended memo of r35480.
-	  http://bugs.ruby-lang.org/projects/ruby-trunk/wiki/R35480_ExtendedMemo
 
 Fri Apr 27 12:34:23 2012  NAKAMURA Usaku  <usa@ruby-lang.org>
 

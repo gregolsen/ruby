@@ -249,7 +249,7 @@ r_value(VALUE value)
     (rb_ary_push(iseq->compile_data->catch_table_ary,		\
 		 rb_ary_new3(5, (type),				\
 			     (VALUE)(ls) | 1, (VALUE)(le) | 1,	\
-			     (iseqv), (VALUE)(lc) | 1)))
+			     (VALUE)(iseqv), (VALUE)(lc) | 1)))
 
 /* compile node */
 #define COMPILE(anchor, desc, node) \
@@ -475,31 +475,36 @@ rb_iseq_compile_node(VALUE self, NODE *node)
 	iseq_set_arguments(iseq, ret, node->nd_args);
 
 	switch (iseq->type) {
-	  case ISEQ_TYPE_BLOCK: {
-	    LABEL *start = iseq->compile_data->start_label = NEW_LABEL(0);
-	    LABEL *end = iseq->compile_data->end_label = NEW_LABEL(0);
+	  case ISEQ_TYPE_BLOCK:
+	    {
+		LABEL *start = iseq->compile_data->start_label = NEW_LABEL(0);
+		LABEL *end = iseq->compile_data->end_label = NEW_LABEL(0);
 
-	    ADD_LABEL(ret, start);
-	    COMPILE(ret, "block body", node->nd_body);
-	    ADD_LABEL(ret, end);
+		ADD_LABEL(ret, start);
+		ADD_TRACE(ret, FIX2INT(iseq->location.first_lineno), RUBY_EVENT_B_CALL);
+		COMPILE(ret, "block body", node->nd_body);
+		ADD_TRACE(ret, nd_line(node), RUBY_EVENT_B_RETURN);
+		ADD_LABEL(ret, end);
 
-	    /* wide range catch handler must put at last */
-	    ADD_CATCH_ENTRY(CATCH_TYPE_REDO, start, end, 0, start);
-	    ADD_CATCH_ENTRY(CATCH_TYPE_NEXT, start, end, 0, end);
-	    break;
-	  }
-	  case ISEQ_TYPE_CLASS: {
-	    ADD_TRACE(ret, FIX2INT(iseq->location.first_lineno), RUBY_EVENT_CLASS);
-	    COMPILE(ret, "scoped node", node->nd_body);
-	    ADD_TRACE(ret, nd_line(node), RUBY_EVENT_END);
-	    break;
-	  }
-	  case ISEQ_TYPE_METHOD: {
-	    ADD_TRACE(ret, FIX2INT(iseq->location.first_lineno), RUBY_EVENT_CALL);
-	    COMPILE(ret, "scoped node", node->nd_body);
-	    ADD_TRACE(ret, nd_line(node), RUBY_EVENT_RETURN);
-	    break;
-	  }
+		/* wide range catch handler must put at last */
+		ADD_CATCH_ENTRY(CATCH_TYPE_REDO, start, end, 0, start);
+		ADD_CATCH_ENTRY(CATCH_TYPE_NEXT, start, end, 0, end);
+		break;
+	    }
+	  case ISEQ_TYPE_CLASS:
+	    {
+		ADD_TRACE(ret, FIX2INT(iseq->location.first_lineno), RUBY_EVENT_CLASS);
+		COMPILE(ret, "scoped node", node->nd_body);
+		ADD_TRACE(ret, nd_line(node), RUBY_EVENT_END);
+		break;
+	    }
+	  case ISEQ_TYPE_METHOD:
+	    {
+		ADD_TRACE(ret, FIX2INT(iseq->location.first_lineno), RUBY_EVENT_CALL);
+		COMPILE(ret, "scoped node", node->nd_body);
+		ADD_TRACE(ret, nd_line(node), RUBY_EVENT_RETURN);
+		break;
+	    }
 	  default: {
 	    COMPILE(ret, "scoped node", node->nd_body);
 	    break;
@@ -1935,6 +1940,8 @@ iseq_specialized_instruction(rb_iseq_t *iseq, INSN *iobj)
 		}
 		break;
 	    }
+	}
+	if (ci->flag & VM_CALL_ARGS_SKIP_SETUP) {
 	    iobj->insn_id = BIN(opt_send_simple);
 	}
     }
@@ -2379,7 +2386,10 @@ compile_array_(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE* node_root,
 			rb_ary_push(ary, node->nd_head->nd_lit);
 			node = node->nd_next;
 		    }
-		    while (node && nd_type(node->nd_head) == NODE_LIT) {
+		    while (node && nd_type(node->nd_head) == NODE_LIT &&
+			   node->nd_next && nd_type(node->nd_next->nd_head) == NODE_LIT) {
+			rb_ary_push(ary, node->nd_head->nd_lit);
+			node = node->nd_next;
 			rb_ary_push(ary, node->nd_head->nd_lit);
 			node = node->nd_next;
 			len++;
@@ -4214,11 +4224,17 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE * node, int poped)
 	INIT_ANCHOR(args);
 #if SUPPORT_JOKE
 	if (nd_type(node) == NODE_VCALL) {
-	    if (mid == idBitblt) {
+	    ID id_bitblt;
+	    ID id_answer;
+
+	    CONST_ID(id_bitblt, "bitblt");
+	    CONST_ID(id_answer, "the_answer_to_life_the_universe_and_everything");
+
+	    if (mid == id_bitblt) {
 		ADD_INSN(ret, nd_line(node), bitblt);
 		break;
 	    }
-	    else if (mid == idAnswer) {
+	    else if (mid == id_answer) {
 		ADD_INSN(ret, nd_line(node), answer);
 		break;
 	    }

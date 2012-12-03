@@ -12,6 +12,7 @@
 #include "ruby/ruby.h"
 #include "ruby/encoding.h"
 #include "internal.h"
+#include "id.h"
 
 #ifdef HAVE_FLOAT_H
 #include <float.h>
@@ -88,7 +89,7 @@ range_initialize(int argc, VALUE *argv, VALUE range)
     rb_scan_args(argc, argv, "21", &beg, &end, &flags);
     /* Ranges are immutable, so that they should be initialized only once. */
     if (RANGE_EXCL(range) != Qnil) {
-	rb_name_error(rb_intern("initialize"), "`initialize' called twice");
+	rb_name_error(idInitialize, "`initialize' called twice");
     }
     range_init(range, beg, end, RTEST(flags));
     return Qnil;
@@ -432,7 +433,7 @@ range_step(int argc, VALUE *argv, VALUE range)
     else if (rb_obj_is_kind_of(b, rb_cNumeric) ||
 	     !NIL_P(rb_check_to_integer(b, "to_int")) ||
 	     !NIL_P(rb_check_to_integer(e, "to_int"))) {
-	ID op = EXCL(range) ? '<' : rb_intern("<=");
+	ID op = EXCL(range) ? '<' : idLE;
 	VALUE v = b;
 	int i = 0;
 
@@ -489,7 +490,7 @@ range_step(int argc, VALUE *argv, VALUE range)
  *  - the block returns true for any value which is greater than or
  *    equal to i.
  *
- *  If x is within the range, this method returns the value x. 
+ *  If x is within the range, this method returns the value x.
  *  Otherwise, it returns nil.
  *
  *     ary = [0, 4, 7, 10, 12]
@@ -750,7 +751,6 @@ range_bsearch(VALUE range)
 	rb_raise(rb_eTypeError, "can't do binary search for %s", rb_obj_classname(beg));
     }
     return range;
-    
 }
 
 static VALUE
@@ -925,7 +925,7 @@ range_first(int argc, VALUE *argv, VALUE range)
     rb_scan_args(argc, argv, "1", &n);
     ary[0] = n;
     ary[1] = rb_ary_new2(NUM2LONG(n));
-    rb_block_call(range, rb_intern("each"), 0, 0, first_i, (VALUE)ary);
+    rb_block_call(range, idEach, 0, 0, first_i, (VALUE)ary);
 
     return ary[1];
 }

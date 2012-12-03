@@ -186,11 +186,11 @@ vm_set_main_stack(rb_thread_t *th, VALUE iseqval)
 }
 
 rb_control_frame_t *
-rb_vm_get_ruby_level_next_cfp(rb_thread_t *th, rb_control_frame_t *cfp)
+rb_vm_get_ruby_level_next_cfp(rb_thread_t *th, const rb_control_frame_t *cfp)
 {
     while (!RUBY_VM_CONTROL_FRAME_STACK_OVERFLOW_P(th, cfp)) {
 	if (RUBY_VM_NORMAL_ISEQ_P(cfp->iseq)) {
-	    return cfp;
+	    return (rb_control_frame_t *)cfp;
 	}
 	cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
     }
@@ -476,13 +476,23 @@ vm_collect_local_variables_in_heap(rb_thread_t *th, VALUE *ep, VALUE ary)
 }
 
 static void vm_rewrite_ep_in_errinfo(rb_thread_t *th);
+static VALUE vm_make_proc_from_block(rb_thread_t *th, rb_block_t *block);
 
 VALUE
 rb_vm_make_env_object(rb_thread_t * th, rb_control_frame_t *cfp)
 {
     VALUE envval;
+    VALUE *lep = VM_CF_LEP(cfp);
+    rb_block_t *blockptr = VM_EP_BLOCK_PTR(lep);
 
-    envval = vm_make_env_each(th, cfp, cfp->ep, VM_CF_LEP(cfp));
+    if (blockptr) {
+	VALUE blockprocval = vm_make_proc_from_block(th, blockptr);
+	rb_proc_t *p;
+	GetProcPtr(blockprocval, p);
+	lep[0] = VM_ENVVAL_BLOCK_PTR(&p->block);
+    }
+
+    envval = vm_make_env_each(th, cfp, cfp->ep, lep);
     vm_rewrite_ep_in_errinfo(th);
 
     if (PROCDEBUG) {
@@ -545,19 +555,9 @@ rb_vm_make_proc(rb_thread_t *th, const rb_block_t *block, VALUE klass)
     VALUE procval, envval, blockprocval = 0;
     rb_proc_t *proc;
     rb_control_frame_t *cfp = RUBY_VM_GET_CFP_FROM_BLOCK_PTR(block);
-    rb_block_t *block2;
 
     if (block->proc) {
 	rb_bug("rb_vm_make_proc: Proc value is already created.");
-    }
-
-    if ((block2 = VM_CF_BLOCK_PTR(cfp)) != 0) {
-	rb_proc_t *p;
-
-	blockprocval = vm_make_proc_from_block(th, block2);
-
-	GetProcPtr(blockprocval, p);
-	*VM_CF_LEP(cfp) = VM_ENVVAL_BLOCK_PTR(&p->block);
     }
 
     envval = rb_vm_make_env_object(th, cfp);
@@ -1177,7 +1177,7 @@ vm_exec(rb_thread_t *th)
 	    if (UNLIKELY(VM_FRAME_TYPE(th->cfp) == VM_FRAME_MAGIC_CFUNC)) {
 		const rb_method_entry_t *me = th->cfp->me;
 		EXEC_EVENT_HOOK(th, RUBY_EVENT_C_RETURN, th->cfp->self, me->called_id, me->klass, Qnil);
-		RUBY_DTRACE_FUNC_RETURN_HOOK(me->klass, me->called_id);
+		RUBY_DTRACE_METHOD_RETURN_HOOK(th, me->klass, me->called_id);
 	    }
 	    th->cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(th->cfp);
 	}
@@ -1350,7 +1350,11 @@ vm_exec(rb_thread_t *th)
 
 	    switch (VM_FRAME_TYPE(th->cfp)) {
 	      case VM_FRAME_MAGIC_METHOD:
+		RUBY_DTRACE_METHOD_RETURN_HOOK(th, 0, 0)
 		EXEC_EVENT_HOOK(th, RUBY_EVENT_RETURN, th->cfp->self, 0, 0, Qnil);
+		break;
+	      case VM_FRAME_MAGIC_BLOCK:
+		EXEC_EVENT_HOOK(th, RUBY_EVENT_B_RETURN, th->cfp->self, 0, 0, Qnil);
 		break;
 	      case VM_FRAME_MAGIC_CLASS:
 		EXEC_EVENT_HOOK(th, RUBY_EVENT_END, th->cfp->self, 0, 0, Qnil);
@@ -1982,10 +1986,11 @@ m_core_hash_from_ary(VALUE self, VALUE ary)
     VALUE hash = rb_hash_new();
     int i;
 
-    if(RUBY_DTRACE_HASH_CREATE_ENABLED()) {
+    if (RUBY_DTRACE_HASH_CREATE_ENABLED()) {
 	RUBY_DTRACE_HASH_CREATE(RARRAY_LEN(ary), rb_sourcefile(), rb_sourceline());
     }
 
+    assert(RARRAY_LEN(ary) % 2 == 0);
     for (i=0; i<RARRAY_LEN(ary); i+=2) {
 	rb_hash_aset(hash, RARRAY_PTR(ary)[i], RARRAY_PTR(ary)[i+1]);
     }
@@ -1998,6 +2003,7 @@ m_core_hash_merge_ary(VALUE self, VALUE hash, VALUE ary)
 {
     int i;
 
+    assert(RARRAY_LEN(ary) % 2 == 0);
     for (i=0; i<RARRAY_LEN(ary); i+=2) {
 	rb_hash_aset(hash, RARRAY_PTR(ary)[i], RARRAY_PTR(ary)[i+1]);
     }

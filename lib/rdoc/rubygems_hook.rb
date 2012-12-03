@@ -73,7 +73,6 @@ class RDoc::RubygemsHook
 
   def initialize spec, generate_rdoc = true, generate_ri = true
     @doc_dir   = spec.doc_dir
-    @file_info = nil
     @force     = false
     @rdoc      = nil
     @spec      = spec
@@ -104,23 +103,27 @@ class RDoc::RubygemsHook
   # Documentation will be generated into +destination+
 
   def document generator, options, destination
+    generator_name = generator
+
     options = options.dup
     options.exclude ||= [] # TODO maybe move to RDoc::Options#finish
     options.setup_generator generator
     options.op_dir = destination
     options.finish
 
-    @rdoc.options = options
-    @rdoc.generator = options.generator.new options
+    generator = options.generator.new @rdoc.store, options
 
-    say "Installing #{generator} documentation for #{@spec.full_name}"
+    @rdoc.options = options
+    @rdoc.generator = generator
+
+    say "Installing #{generator_name} documentation for #{@spec.full_name}"
 
     FileUtils.mkdir_p options.op_dir
 
     Dir.chdir options.op_dir do
       begin
         @rdoc.class.current = @rdoc
-        @rdoc.generator.generate @file_info
+        @rdoc.generator.generate
       ensure
         @rdoc.class.current = nil
       end
@@ -131,17 +134,16 @@ class RDoc::RubygemsHook
   # Generates RDoc and ri data
 
   def generate
+    return if @spec.default_gem?
     return unless @generate_ri or @generate_rdoc
 
     setup
 
-    ::RDoc::RDoc.reset
-
     options = ::RDoc::Options.new
     options.default_title = "#{@spec.full_name} Documentation"
     options.files = []
-    options.files.push(*@spec.require_paths)
-    options.files.push(*@spec.extra_rdoc_files)
+    options.files.concat @spec.require_paths
+    options.files.concat @spec.extra_rdoc_files
 
     args = @spec.rdoc_options
 
@@ -159,8 +161,18 @@ class RDoc::RubygemsHook
     @rdoc = new_rdoc
     @rdoc.options = options
 
+    store = RDoc::Store.new
+    store.encoding = options.encoding if options.respond_to? :encoding
+    store.dry_run  = options.dry_run
+    store.main     = options.main_page
+    store.title    = options.title
+
+    @rdoc.store = RDoc::Store.new
+
+    say "Parsing documentation for #{@spec.full_name}"
+
     Dir.chdir @spec.full_gem_path do
-      @file_info = @rdoc.parse_files options.files
+      @rdoc.parse_files options.files
     end
 
     document 'ri',       options, @ri_dir if

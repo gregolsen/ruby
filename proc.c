@@ -310,7 +310,7 @@ binding_clone(VALUE self)
 }
 
 VALUE
-rb_binding_new_with_cfp(rb_thread_t *th, rb_control_frame_t *src_cfp)
+rb_binding_new_with_cfp(rb_thread_t *th, const rb_control_frame_t *src_cfp)
 {
     rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(th, src_cfp);
     VALUE bindval = binding_alloc(rb_cBinding);
@@ -772,37 +772,6 @@ rb_proc_parameters(VALUE self)
 	return unnamed_parameters(rb_proc_arity(self));
     }
     return rb_iseq_parameters(iseq, is_proc);
-}
-
-/*
- * call-seq:
- *   prc == other_proc   ->  true or false
- *
- * Returns <code>true</code> if <i>prc</i> is the same object as
- * <i>other_proc</i>, or if they are both procs with the same body.
- */
-
-static VALUE
-proc_eq(VALUE self, VALUE other)
-{
-    if (self == other) {
-	return Qtrue;
-    }
-    else {
-	if (rb_obj_is_proc(other)) {
-	    rb_proc_t *p1, *p2;
-	    GetProcPtr(self, p1);
-	    GetProcPtr(other, p2);
-	    if (p1->envval == p2->envval &&
-		p1->block.iseq->iseq_size == p2->block.iseq->iseq_size &&
-		p1->block.iseq->local_size == p2->block.iseq->local_size &&
-		MEMCMP(p1->block.iseq->iseq, p2->block.iseq->iseq, VALUE,
-		       p1->block.iseq->iseq_size) == 0) {
-		return Qtrue;
-	    }
-	}
-    }
-    return Qfalse;
 }
 
 st_index_t
@@ -1533,9 +1502,10 @@ rb_method_call(int argc, VALUE *argv, VALUE method)
     }
     PUSH_TAG();
     if (OBJ_TAINTED(method)) {
+	const int safe_level_to_run = 4 /*SAFE_LEVEL_MAX*/;
 	safe = rb_safe_level();
-	if (rb_safe_level() < 4) {
-	    rb_set_safe_level_force(4);
+	if (rb_safe_level() < safe_level_to_run) {
+	    rb_set_safe_level_force(safe_level_to_run);
 	}
     }
     if ((state = EXEC_TAG()) == 0) {
@@ -2241,8 +2211,6 @@ Init_Proc(void)
     rb_define_method(rb_cProc, "arity", proc_arity, 0);
     rb_define_method(rb_cProc, "clone", proc_clone, 0);
     rb_define_method(rb_cProc, "dup", proc_dup, 0);
-    rb_define_method(rb_cProc, "==", proc_eq, 1);
-    rb_define_method(rb_cProc, "eql?", proc_eq, 1);
     rb_define_method(rb_cProc, "hash", proc_hash, 0);
     rb_define_method(rb_cProc, "to_s", proc_to_s, 0);
     rb_define_alias(rb_cProc, "inspect", "to_s");

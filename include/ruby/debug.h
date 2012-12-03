@@ -26,23 +26,26 @@ extern "C" {
 /* Note: This file contains experimental APIs. */
 /* APIs can be replaced at Ruby 2.0.1 or later */
 
-typedef enum {
-    RUBY_EVENT_HOOK_FLAG_SAFE    = 0x01,
-    RUBY_EVENT_HOOK_FLAG_DELETED = 0x02,
-    RUBY_EVENT_HOOK_FLAG_RAW_ARG = 0x04
-} rb_event_hook_flag_t;
+/* debug inspector APIs */
+typedef struct rb_debug_inspector_struct rb_debug_inspector_t;
+typedef VALUE (*rb_debug_inspector_func_t)(const rb_debug_inspector_t *, void *);
 
-/* Safe API.  Callback will be called under PUSH_TAG() */
+VALUE rb_debug_inspector_open(rb_debug_inspector_func_t func, void *data);
+VALUE rb_debug_inspector_frame_binding_get(const rb_debug_inspector_t *dc, int index);
+VALUE rb_debug_inspector_frame_class_get(const rb_debug_inspector_t *dc, int index);
+VALUE rb_debug_inspector_frame_iseq_get(const rb_debug_inspector_t *dc, int index);
+VALUE rb_debug_inspector_backtrace_locations(const rb_debug_inspector_t *dc);
+
+/* Old style set_trace_func APIs */
+
+/* duplicated def of include/ruby/ruby.h */
 void rb_add_event_hook(rb_event_hook_func_t func, rb_event_flag_t events, VALUE data);
 int rb_remove_event_hook(rb_event_hook_func_t func);
+
 int rb_remove_event_hook_with_data(rb_event_hook_func_t func, VALUE data);
 void rb_thread_add_event_hook(VALUE thval, rb_event_hook_func_t func, rb_event_flag_t events, VALUE data);
 int rb_thread_remove_event_hook(VALUE thval, rb_event_hook_func_t func);
 int rb_thread_remove_event_hook_with_data(VALUE thval, rb_event_hook_func_t func, VALUE data);
-
-/* advanced version */
-void rb_add_event_hook2(rb_event_hook_func_t func, rb_event_flag_t events, VALUE data, rb_event_hook_flag_t hook_flag);
-void rb_thread_add_event_hook2(VALUE thval, rb_event_hook_func_t func, rb_event_flag_t events, VALUE data, rb_event_hook_flag_t hook_flag);
 
 /* TracePoint APIs */
 
@@ -51,15 +54,29 @@ VALUE rb_tracepoint_enable(VALUE tpval);
 VALUE rb_tracepoint_disable(VALUE tpval);
 VALUE rb_tracepoint_enabled_p(VALUE tpval);
 
-VALUE rb_tracepoint_attr_event(VALUE tpval);
-VALUE rb_tracepoint_attr_line(VALUE tpval);
-VALUE rb_tracepoint_attr_file(VALUE tpval);
-VALUE rb_tracepoint_attr_id(VALUE tpval);
-VALUE rb_tracepoint_attr_klass(VALUE tpval);
-VALUE rb_tracepoint_attr_binding(VALUE tpval);
-VALUE rb_tracepoint_attr_self(VALUE tpval);
-VALUE rb_tracepoint_attr_return_value(VALUE tpval);
-VALUE rb_tracepoint_attr_raised_exception(VALUE tpval);
+struct rb_trace_arg_struct;
+struct rb_trace_arg_struct *rb_tracearg_from_tracepoint(VALUE tpval);
+
+VALUE rb_tracearg_event(struct rb_trace_arg_struct *trace_arg);
+VALUE rb_tracearg_lineno(struct rb_trace_arg_struct *trace_arg);
+VALUE rb_tracearg_path(struct rb_trace_arg_struct *trace_arg);
+VALUE rb_tracearg_method_id(struct rb_trace_arg_struct *trace_arg);
+VALUE rb_tracearg_defined_class(struct rb_trace_arg_struct *trace_arg);
+VALUE rb_tracearg_binding(struct rb_trace_arg_struct *trace_arg);
+VALUE rb_tracearg_self(struct rb_trace_arg_struct *trace_arg);
+VALUE rb_tracearg_return_value(struct rb_trace_arg_struct *trace_arg);
+VALUE rb_tracearg_raised_exception(struct rb_trace_arg_struct *trace_arg);
+
+/* undocumented advanced tracing APIs */
+
+typedef enum {
+    RUBY_EVENT_HOOK_FLAG_SAFE    = 0x01,
+    RUBY_EVENT_HOOK_FLAG_DELETED = 0x02,
+    RUBY_EVENT_HOOK_FLAG_RAW_ARG = 0x04
+} rb_event_hook_flag_t;
+
+void rb_add_event_hook2(rb_event_hook_func_t func, rb_event_flag_t events, VALUE data, rb_event_hook_flag_t hook_flag);
+void rb_thread_add_event_hook2(VALUE thval, rb_event_hook_func_t func, rb_event_flag_t events, VALUE data, rb_event_hook_flag_t hook_flag);
 
 #if defined __GNUC__ && __GNUC__ >= 4
 #pragma GCC visibility pop

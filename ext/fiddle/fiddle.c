@@ -1,6 +1,7 @@
 #include <fiddle.h>
 
 VALUE mFiddle;
+VALUE rb_eFiddleError;
 
 #ifndef TYPE_SSIZE_T
 # if SIZEOF_SIZE_T == SIZEOF_INT
@@ -34,18 +35,144 @@ VALUE mFiddle;
 #endif
 #define TYPE_UINTPTR_T (-TYPE_INTPTR_T)
 
+void Init_fiddle_pointer(void);
+
+/*
+ * call-seq: Fiddle.malloc(size)
+ *
+ * Allocate +size+ bytes of memory and return the integer memory address
+ * for the allocated memory.
+ */
+static VALUE
+rb_fiddle_malloc(VALUE self, VALUE size)
+{
+    void *ptr;
+
+    rb_secure(4);
+    ptr = (void*)ruby_xmalloc(NUM2INT(size));
+    return PTR2NUM(ptr);
+}
+
+/*
+ * call-seq: Fiddle.realloc(addr, size)
+ *
+ * Change the size of the memory allocated at the memory location +addr+ to
+ * +size+ bytes.  Returns the memory address of the reallocated memory, which
+ * may be different than the address passed in.
+ */
+static VALUE
+rb_fiddle_realloc(VALUE self, VALUE addr, VALUE size)
+{
+    void *ptr = NUM2PTR(addr);
+
+    rb_secure(4);
+    ptr = (void*)ruby_xrealloc(ptr, NUM2INT(size));
+    return PTR2NUM(ptr);
+}
+
+/*
+ * call-seq: Fiddle.free(addr)
+ *
+ * Free the memory at address +addr+
+ */
+VALUE
+rb_fiddle_free(VALUE self, VALUE addr)
+{
+    void *ptr = NUM2PTR(addr);
+
+    rb_secure(4);
+    ruby_xfree(ptr);
+    return Qnil;
+}
+
+/*
+ * call-seq: Fiddle.dlunwrap(addr)
+ *
+ * Returns the hexadecimal representation of a memory pointer address +addr+
+ *
+ * Example:
+ *
+ *   lib = Fiddle.dlopen('/lib64/libc-2.15.so')
+ *   => #<Fiddle::Handle:0x00000001342460>
+ *
+ *   lib['strcpy'].to_s(16)
+ *   => "7f59de6dd240"
+ *
+ *   Fiddle.dlunwrap(Fiddle.dlwrap(lib['strcpy'].to_s(16)))
+ *   => "7f59de6dd240"
+ */
+VALUE
+rb_fiddle_ptr2value(VALUE self, VALUE addr)
+{
+    rb_secure(4);
+    return (VALUE)NUM2PTR(addr);
+}
+
+/*
+ * call-seq: Fiddle.dlwrap(val)
+ *
+ * Returns a memory pointer of a function's hexadecimal address location +val+
+ *
+ * Example:
+ *
+ *   lib = Fiddle.dlopen('/lib64/libc-2.15.so')
+ *   => #<Fiddle::Handle:0x00000001342460>
+ *
+ *   Fiddle.dlwrap(lib['strcpy'].to_s(16))
+ *   => 25522520
+ */
+static VALUE
+rb_fiddle_value2ptr(VALUE self, VALUE val)
+{
+    return PTR2NUM((void*)val);
+}
+
+void Init_fiddle_handle(void);
+
 void
 Init_fiddle(void)
 {
     /*
      * Document-module: Fiddle
      *
+     * A libffi wrapper for Ruby.
+     *
      * == Description
      *
-     * A libffi wrapper.
+     * Fiddle is an extension to translate a foreign function interface (FFI)
+     * with ruby.
+     *
+     * It wraps {libffi}[http://sourceware.org/libffi/], a popular C library
+     * which provides a portable interface that allows code written in one
+     * language to clal code written in another language.
+     *
+     * == Example
+     *
+     * Here we will use Fiddle::Function to wrap {floor(3) from
+     * libm}[http://linux.die.net/man/3/floor]
+     *
+     *	    require 'fiddle'
+     *
+     *	    libm = Fiddle.dlopen('/lib/libm.so.6')
+     *
+     *	    floor = Fiddle::Function.new(
+     *	      libm['floor'],
+     *	      [Fiddle::TYPE_DOUBLE],
+     *	      Fiddle::TYPE_DOUBLE
+     *	    )
+     *
+     *	    puts floor.call(3.14159) #=> 3.0
+     *
      *
      */
     mFiddle = rb_define_module("Fiddle");
+
+    /*
+     * Document-class: Fiddle::DLError
+     *
+     * standard dynamic load exception
+     */
+    rb_eFiddleError = rb_define_class_under(mFiddle, "DLError", rb_eStandardError);
 
     /* Document-const: TYPE_VOID
      *
@@ -133,6 +260,86 @@ Init_fiddle(void)
      */
     rb_define_const(mFiddle, "TYPE_UINTPTR_T",  INT2NUM(TYPE_UINTPTR_T));
 
+    /* Document-const: ALIGN_VOIDP
+     *
+     * The alignment size of a void*
+     */
+    rb_define_const(mFiddle, "ALIGN_VOIDP", INT2NUM(ALIGN_VOIDP));
+
+    /* Document-const: ALIGN_CHAR
+     *
+     * The alignment size of a char
+     */
+    rb_define_const(mFiddle, "ALIGN_CHAR",  INT2NUM(ALIGN_CHAR));
+
+    /* Document-const: ALIGN_SHORT
+     *
+     * The alignment size of a short
+     */
+    rb_define_const(mFiddle, "ALIGN_SHORT", INT2NUM(ALIGN_SHORT));
+
+    /* Document-const: ALIGN_INT
+     *
+     * The alignment size of an int
+     */
+    rb_define_const(mFiddle, "ALIGN_INT",   INT2NUM(ALIGN_INT));
+
+    /* Document-const: ALIGN_LONG
+     *
+     * The alignment size of a long
+     */
+    rb_define_const(mFiddle, "ALIGN_LONG",  INT2NUM(ALIGN_LONG));
+
+#if HAVE_LONG_LONG
+    /* Document-const: ALIGN_LONG_LONG
+     *
+     * The alignment size of a long long
+     */
+    rb_define_const(mFiddle, "ALIGN_LONG_LONG",  INT2NUM(ALIGN_LONG_LONG));
+#endif
+
+    /* Document-const: ALIGN_FLOAT
+     *
+     * The alignment size of a float
+     */
+    rb_define_const(mFiddle, "ALIGN_FLOAT", INT2NUM(ALIGN_FLOAT));
+
+    /* Document-const: ALIGN_DOUBLE
+     *
+     * The alignment size of a double
+     */
+    rb_define_const(mFiddle, "ALIGN_DOUBLE",INT2NUM(ALIGN_DOUBLE));
+
+    /* Document-const: ALIGN_SIZE_T
+     *
+     * The alignment size of a size_t
+     */
+    rb_define_const(mFiddle, "ALIGN_SIZE_T", INT2NUM(ALIGN_OF(size_t)));
+
+    /* Document-const: ALIGN_SSIZE_T
+     *
+     * The alignment size of a ssize_t
+     */
+    rb_define_const(mFiddle, "ALIGN_SSIZE_T", INT2NUM(ALIGN_OF(size_t))); /* same as size_t */
+
+    /* Document-const: ALIGN_PTRDIFF_T
+     *
+     * The alignment size of a ptrdiff_t
+     */
+    rb_define_const(mFiddle, "ALIGN_PTRDIFF_T", INT2NUM(ALIGN_OF(ptrdiff_t)));
+
+    /* Document-const: ALIGN_INTPTR_T
+     *
+     * The alignment size of a intptr_t
+     */
+    rb_define_const(mFiddle, "ALIGN_INTPTR_T", INT2NUM(ALIGN_OF(intptr_t)));
+
+    /* Document-const: ALIGN_UINTPTR_T
+     *
+     * The alignment size of a uintptr_t
+     */
+    rb_define_const(mFiddle, "ALIGN_UINTPTR_T", INT2NUM(ALIGN_OF(uintptr_t)));
+
     /* Document-const: WINDOWS
      *
      * Returns a boolean regarding whether the host is WIN32
@@ -143,7 +350,109 @@ Init_fiddle(void)
     rb_define_const(mFiddle, "WINDOWS", Qfalse);
 #endif
 
+    /* Document-const: SIZEOF_VOIDP
+     *
+     * size of a void*
+     */
+    rb_define_const(mFiddle, "SIZEOF_VOIDP", INT2NUM(sizeof(void*)));
+
+    /* Document-const: SIZEOF_CHAR
+     *
+     * size of a char
+     */
+    rb_define_const(mFiddle, "SIZEOF_CHAR",  INT2NUM(sizeof(char)));
+
+    /* Document-const: SIZEOF_SHORT
+     *
+     * size of a short
+     */
+    rb_define_const(mFiddle, "SIZEOF_SHORT", INT2NUM(sizeof(short)));
+
+    /* Document-const: SIZEOF_INT
+     *
+     * size of an int
+     */
+    rb_define_const(mFiddle, "SIZEOF_INT",   INT2NUM(sizeof(int)));
+
+    /* Document-const: SIZEOF_LONG
+     *
+     * size of a long
+     */
+    rb_define_const(mFiddle, "SIZEOF_LONG",  INT2NUM(sizeof(long)));
+
+#if HAVE_LONG_LONG
+    /* Document-const: SIZEOF_LONG_LONG
+     *
+     * size of a long long
+     */
+    rb_define_const(mFiddle, "SIZEOF_LONG_LONG",  INT2NUM(sizeof(LONG_LONG)));
+#endif
+
+    /* Document-const: SIZEOF_FLOAT
+     *
+     * size of a float
+     */
+    rb_define_const(mFiddle, "SIZEOF_FLOAT", INT2NUM(sizeof(float)));
+
+    /* Document-const: SIZEOF_DOUBLE
+     *
+     * size of a double
+     */
+    rb_define_const(mFiddle, "SIZEOF_DOUBLE",INT2NUM(sizeof(double)));
+
+    /* Document-const: SIZEOF_SIZE_T
+     *
+     * size of a size_t
+     */
+    rb_define_const(mFiddle, "SIZEOF_SIZE_T",  INT2NUM(sizeof(size_t)));
+
+    /* Document-const: SIZEOF_SSIZE_T
+     *
+     * size of a ssize_t
+     */
+    rb_define_const(mFiddle, "SIZEOF_SSIZE_T",  INT2NUM(sizeof(size_t))); /* same as size_t */
+
+    /* Document-const: SIZEOF_PTRDIFF_T
+     *
+     * size of a ptrdiff_t
+     */
+    rb_define_const(mFiddle, "SIZEOF_PTRDIFF_T",  INT2NUM(sizeof(ptrdiff_t)));
+
+    /* Document-const: SIZEOF_INTPTR_T
+     *
+     * size of a intptr_t
+     */
+    rb_define_const(mFiddle, "SIZEOF_INTPTR_T",  INT2NUM(sizeof(intptr_t)));
+
+    /* Document-const: SIZEOF_UINTPTR_T
+     *
+     * size of a uintptr_t
+     */
+    rb_define_const(mFiddle, "SIZEOF_UINTPTR_T",  INT2NUM(sizeof(uintptr_t)));
+
+    /* Document-const: RUBY_FREE
+     *
+     * Address of the ruby_xfree() function
+     */
+    rb_define_const(mFiddle, "RUBY_FREE", PTR2NUM(ruby_xfree));
+
+    /* Document-const: BUILD_RUBY_PLATFORM
+     *
+     * Platform built against (i.e. "x86_64-linux", etc.)
+     *
+     * See also RUBY_PLATFORM
+     */
+    rb_define_const(mFiddle, "BUILD_RUBY_PLATFORM", rb_str_new2(RUBY_PLATFORM));
+
+    rb_define_module_function(mFiddle, "dlwrap", rb_fiddle_value2ptr, 1);
+    rb_define_module_function(mFiddle, "dlunwrap", rb_fiddle_ptr2value, 1);
+    rb_define_module_function(mFiddle, "malloc", rb_fiddle_malloc, 1);
+    rb_define_module_function(mFiddle, "realloc", rb_fiddle_realloc, 2);
+    rb_define_module_function(mFiddle, "free", rb_fiddle_free, 1);
+
     Init_fiddle_function();
     Init_fiddle_closure();
+    Init_fiddle_handle();
+    Init_fiddle_pointer();
 }
 /* vim: set noet sws=4 sw=4: */

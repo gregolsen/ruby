@@ -508,6 +508,13 @@ class TestRubyOptions < Test::Unit::TestCase
       )x,
       nil,
       opts)
+
+    bug7402 = '[ruby-core:49573]'
+    status = assert_in_out_err(['-e', 'class Bogus; def to_str; exit true; end; end',
+                                '-e', '$".unshift Bogus.new',
+                                '-e', 'Process.kill :SEGV, $$'],
+                               "", //, /#<Bogus:/)
+    assert_not_predicate(status, :success?, "segv but success #{bug7402}")
   end
 
   def test_DATA
@@ -533,6 +540,8 @@ class TestRubyOptions < Test::Unit::TestCase
     assert_in_out_err(["-we", "def foo\n""  1.times do |a| end\n""end"], "", [], [])
     feature6693 = '[ruby-core:46160]'
     assert_in_out_err(["-we", "def foo\n  _a=1\nend"], "", [], [], feature6693)
+    bug7408 = '[ruby-core:49659]'
+    assert_in_out_err(["-we", "def foo\n  a=1\n :a\nend"], "", [], ["-e:2: warning: assigned but unused variable - a"], bug7408)
   end
 
   def test_shadowing_variable

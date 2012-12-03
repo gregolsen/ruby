@@ -17,6 +17,7 @@
 #include "ruby/encoding.h"
 #include "internal.h"
 #include "probes.h"
+#include "id.h"
 
 #ifndef ARRAY_DEBUG
 # define NDEBUG
@@ -379,7 +380,7 @@ ary_alloc(VALUE klass)
 static VALUE
 empty_ary_alloc(VALUE klass)
 {
-    if(RUBY_DTRACE_ARRAY_CREATE_ENABLED()) {
+    if (RUBY_DTRACE_ARRAY_CREATE_ENABLED()) {
 	RUBY_DTRACE_ARRAY_CREATE(0, rb_sourcefile(), rb_sourceline());
     }
 
@@ -398,7 +399,7 @@ ary_new(VALUE klass, long capa)
 	rb_raise(rb_eArgError, "array size too big");
     }
 
-    if(RUBY_DTRACE_ARRAY_CREATE_ENABLED()) {
+    if (RUBY_DTRACE_ARRAY_CREATE_ENABLED()) {
 	RUBY_DTRACE_ARRAY_CREATE(capa, rb_sourcefile(), rb_sourceline());
     }
 
@@ -1326,9 +1327,9 @@ rb_ary_fetch(int argc, VALUE *argv, VALUE ary)
  *  Returns the _index_ of the first object in +ary+ such that the object is
  *  <code>==</code> to +obj+.
  *
- *  If a block is given instead of an argument, returns the _index_ of first
- *  the object for which the block returns +true+.  Returns +nil+ if no match
- *  is found.
+ *  If a block is given instead of an argument, returns the _index_ of the
+ *  first object for which the block returns +true+.  Returns +nil+ if no
+ *  match is found.
  *
  *  See also Array#rindex.
  *
@@ -1375,8 +1376,9 @@ rb_ary_index(int argc, VALUE *argv, VALUE ary)
  *
  *  Returns the _index_ of the last object in +self+ <code>==</code> to +obj+.
  *
- *  If a block is given instead of an argument, returns _index_ of first object
- *  for which block returns +true+, starting from the last object.
+ *  If a block is given instead of an argument, returns the _index_ of the
+ *  first object for which the block returns +true+, starting from the last
+ *  object.
  *
  *  Returns +nil+ if no match is found.
  *
@@ -2156,8 +2158,8 @@ rb_ary_rotate_bang(int argc, VALUE *argv, VALUE ary)
  *  call-seq:
  *     ary.rotate(count=1)    -> new_ary
  *
- *  Returns new array by rotating +self+ so that the element at +count+ is the
- *  first element of the new array.
+ *  Returns a new array by rotating +self+ so that the element at +count+ is
+ *  the first element of the new array.
  *
  *  If +count+ is negative then it rotates in the opposite direction, starting
  *  from the end of +self+ where +-1+ is the last element.
@@ -2719,14 +2721,27 @@ rb_ary_keep_if(VALUE ary)
     return ary;
 }
 
+static void
+ary_resize_smaller(VALUE ary, long len)
+{
+    rb_ary_modify(ary);
+    if (RARRAY_LEN(ary) > len) {
+	ARY_SET_LEN(ary, len);
+	if (len * 2 < ARY_CAPA(ary) &&
+	    ARY_CAPA(ary) > ARY_DEFAULT_SIZE) {
+	    ary_resize_capa(ary, len * 2);
+	}
+    }
+}
+
 /*
  *  call-seq:
- *     ary.delete(obj)            -> obj or nil
- *     ary.delete(obj) { block }  -> obj or nil
+ *     ary.delete(obj)            -> item or nil
+ *     ary.delete(obj) { block }  -> item or result of block
  *
  *  Deletes all items from +self+ that are equal to +obj+.
  *
- *  If any items are found, returns +obj+, otherwise +nil+ is returned instead.
+ *  Returns the last deleted item, or +nil+ if no matching item is found.
  *
  *  If the optional code block is given, the result of the block is returned if
  *  the item is not found.  (To remove +nil+ elements and get an informative
@@ -2764,29 +2779,20 @@ rb_ary_delete(VALUE ary, VALUE item)
 	return Qnil;
     }
 
-    rb_ary_modify(ary);
-    if (RARRAY_LEN(ary) > i2) {
-	ARY_SET_LEN(ary, i2);
-	if (i2 * 2 < ARY_CAPA(ary) &&
-	    ARY_CAPA(ary) > ARY_DEFAULT_SIZE) {
-	    ary_resize_capa(ary, i2*2);
-	}
-    }
+    ary_resize_smaller(ary, i2);
 
     return v;
 }
 
-VALUE
-rb_ary_delete_same_obj(VALUE ary, VALUE item)
+void
+rb_ary_delete_same(VALUE ary, VALUE item)
 {
-    VALUE v = item;
     long i1, i2;
 
     for (i1 = i2 = 0; i1 < RARRAY_LEN(ary); i1++) {
 	VALUE e = RARRAY_PTR(ary)[i1];
 
 	if (e == item) {
-	    v = e;
 	    continue;
 	}
 	if (i1 != i2) {
@@ -2795,19 +2801,10 @@ rb_ary_delete_same_obj(VALUE ary, VALUE item)
 	i2++;
     }
     if (RARRAY_LEN(ary) == i2) {
-	return Qnil;
+	return;
     }
 
-    rb_ary_modify(ary);
-    if (RARRAY_LEN(ary) > i2) {
-	ARY_SET_LEN(ary, i2);
-	if (i2 * 2 < ARY_CAPA(ary) &&
-	    ARY_CAPA(ary) > ARY_DEFAULT_SIZE) {
-	    ary_resize_capa(ary, i2*2);
-	}
-    }
-
-    return v;
+    ary_resize_smaller(ary, i2);
 }
 
 VALUE
@@ -3049,7 +3046,7 @@ take_items(VALUE obj, long n)
     if (!NIL_P(result)) return rb_ary_subseq(result, 0, n);
     result = rb_ary_new2(n);
     args[0] = result; args[1] = (VALUE)n;
-    if (rb_check_block_call(obj, rb_intern("each"), 0, 0, take_i, (VALUE)args) == Qundef)
+    if (rb_check_block_call(obj, idEach, 0, 0, take_i, (VALUE)args) == Qundef)
 	Check_Type(obj, T_ARRAY);
     return result;
 }
@@ -4279,7 +4276,7 @@ static VALUE sym_random;
  *
  *  Shuffles elements in +self+ in place.
  *
- *  The optional +rng+ argument will be used as random number generator.
+ *  The optional +rng+ argument will be used as the random number generator.
  */
 
 static VALUE
@@ -5046,7 +5043,7 @@ rb_ary_product(int argc, VALUE *argv, VALUE ary)
 	}
 
 	/* put it on the result array */
-	if(NIL_P(result)) {
+	if (NIL_P(result)) {
 	    FL_SET(t0, FL_USER5);
 	    rb_yield(subarray);
 	    if (! FL_TEST(t0, FL_USER5)) {
@@ -5086,7 +5083,7 @@ done:
  *
  *  Returns first +n+ elements from the array.
  *
- *  If a non-positive number is given, raises an ArgumentError.
+ *  If a negative number is given, raises an ArgumentError.
  *
  *  See also Array#drop
  *
@@ -5141,7 +5138,7 @@ rb_ary_take_while(VALUE ary)
  *  Drops first +n+ elements from +ary+ and returns the rest of the elements in
  *  an array.
  *
- *  If a non-positive number is given, raises an ArgumentError.
+ *  If a negative number is given, raises an ArgumentError.
  *
  *  See also Array#take
  *
@@ -5218,10 +5215,10 @@ rb_ary_drop_while(VALUE ary)
  *     Array.new(3)       #=> [nil, nil, nil]
  *     Array.new(3, true) #=> [0, 0, 0]
  *
- *  Note that the second argument populates the array with references the same
- *  object.  Therefore, it is only recommended in cases when you need to
- *  instantiate arrays with natively immutable objects such Symbols, numbers,
- *  true or false.
+ *  Note that the second argument populates the array with references to the
+ *  same object.  Therefore, it is only recommended in cases when you need to
+ *  instantiate arrays with natively immutable objects such as Symbols,
+ *  numbers, true or false.
  *
  *  To create an array with separate objects a block can be passed instead.
  *  This method is safe to use with mutable objects such as hashes, strings or

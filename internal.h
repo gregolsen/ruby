@@ -48,7 +48,7 @@ struct vtm; /* defined by timev.h */
 VALUE rb_ary_last(int, VALUE *, VALUE);
 void rb_ary_set_len(VALUE, long);
 VALUE rb_ary_cat(VALUE, const VALUE *, long);
-VALUE rb_ary_delete_same_obj(VALUE, VALUE);
+void rb_ary_delete_same(VALUE, VALUE);
 
 /* bignum.c */
 VALUE rb_big_fdiv(VALUE x, VALUE y);
@@ -278,6 +278,7 @@ VALUE rb_thread_shield_new(void);
 VALUE rb_thread_shield_wait(VALUE self);
 VALUE rb_thread_shield_release(VALUE self);
 VALUE rb_thread_shield_destroy(VALUE self);
+void rb_mutex_allow_trap(VALUE self, int val);
 
 /* thread_pthread.c, thread_win32.c */
 void Init_native_thread(void);

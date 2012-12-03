@@ -35,7 +35,7 @@ module DL
     ]
 
     CallCallback = bind("void call_callback(void*, void*)"){|ptr1, ptr2|
-      f = Function.new(CFunc.new(ptr1.to_i, DL::TYPE_VOID, "<anonymous>"), [TYPE_VOIDP])
+      f = Function.new(CFunc.new(ptr1.to_i, TYPE_VOID, "<anonymous>"), [TYPE_VOIDP])
       f.call(ptr2)
     }
     CarriedFunction = bind("void callback_function(void*)", :carried, 0)
@@ -45,7 +45,7 @@ module DL
     def test_ensure_call_dlload
       err = assert_raises(RuntimeError) do
         Class.new do
-          extend DL::Importer
+          extend Importer
           extern "void *strcpy(char*, char*)"
         end
       end
@@ -59,7 +59,7 @@ module DL
     end
 
     def test_sizeof()
-      assert_equal(DL::SIZEOF_VOIDP, LIBC.sizeof("FILE*"))
+      assert_equal(SIZEOF_VOIDP, LIBC.sizeof("FILE*"))
       assert_equal(LIBC::MyStruct.size(), LIBC.sizeof(LIBC::MyStruct))
     end
 
@@ -71,7 +71,7 @@ module DL
     end
 
     def test_io()
-      if( RUBY_PLATFORM != DL::BUILD_RUBY_PLATFORM )
+      if( RUBY_PLATFORM != BUILD_RUBY_PLATFORM )
         return
       end
       io_in,io_out = IO.pipe()

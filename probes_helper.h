@@ -4,32 +4,62 @@
 #include "ruby/ruby.h"
 #include "probes.h"
 
-#define RUBY_DTRACE_FUNC_ENTRY_HOOK(klass, id) \
-    if (RUBY_DTRACE_FUNCTION_ENTRY_ENABLED()) { \
-	const char * classname  = rb_class2name((klass)); \
-	const char * methodname = rb_id2name((id)); \
-	const char * filename   = rb_sourcefile(); \
-	if (classname && methodname && filename) { \
-	    RUBY_DTRACE_FUNCTION_ENTRY( \
-		    classname, \
-		    methodname, \
-		    filename, \
-		    rb_sourceline()); \
+VALUE rb_class_path_no_cache(VALUE _klass);
+
+#define RUBY_DTRACE_HOOK(name, th, klazz, id) \
+    if (RUBY_DTRACE_##name##_ENABLED()) { \
+	VALUE _klass = (klazz); \
+	VALUE _id = (id); \
+	const char * classname; \
+	const char * methodname; \
+	const char * filename; \
+	if (!_klass) { \
+	    rb_thread_method_id_and_class((th), &_id, &_klass); \
+	} \
+	if (_klass) { \
+	    if (RB_TYPE_P(_klass, T_ICLASS)) { \
+		_klass = RBASIC(_klass)->klass; \
+	    } \
+	    else if (FL_TEST(_klass, FL_SINGLETON)) { \
+		_klass = rb_iv_get(_klass, "__attached__"); \
+	    } \
+	    switch (TYPE(_klass)) { \
+		case T_CLASS: \
+		case T_ICLASS: \
+		case T_MODULE: \
+		{ \
+		    VALUE _name = rb_class_path_no_cache(_klass); \
+		    if (!NIL_P(_name)) { \
+		        classname = StringValuePtr(_name); \
+		    } \
+		    else {			 \
+		        classname = "<unknown>"; \
+		    } \
+		    methodname = rb_id2name(_id); \
+		    filename   = rb_sourcefile(); \
+		    if (classname && methodname && filename) { \
+		        RUBY_DTRACE_##name( \
+				classname, \
+				methodname, \
+				filename, \
+				rb_sourceline()); \
+		    } \
+		    break; \
+		} \
+	    } \
 	} \
     } \
 
-#define RUBY_DTRACE_FUNC_RETURN_HOOK(klass, id) \
-    if (RUBY_DTRACE_FUNCTION_RETURN_ENABLED()) { \
-	const char * classname  = rb_class2name((klass)); \
-	const char * methodname = rb_id2name((id)); \
-	const char * filename   = rb_sourcefile(); \
-	if (classname && methodname && filename) { \
-	    RUBY_DTRACE_FUNCTION_RETURN( \
-		    classname, \
-		    methodname, \
-		    filename, \
-		    rb_sourceline()); \
-	} \
-    } \
+#define RUBY_DTRACE_METHOD_ENTRY_HOOK(th, klass, id) \
+    RUBY_DTRACE_HOOK(METHOD_ENTRY, th, klass, id)
+
+#define RUBY_DTRACE_METHOD_RETURN_HOOK(th, klass, id) \
+    RUBY_DTRACE_HOOK(METHOD_RETURN, th, klass, id)
+
+#define RUBY_DTRACE_CMETHOD_ENTRY_HOOK(th, klass, id) \
+    RUBY_DTRACE_HOOK(CMETHOD_ENTRY, th, klass, id)
+
+#define RUBY_DTRACE_CMETHOD_RETURN_HOOK(th, klass, id) \
+    RUBY_DTRACE_HOOK(CMETHOD_RETURN, th, klass, id)
 
 #endif /* RUBY_PROBES_HELPER_H */

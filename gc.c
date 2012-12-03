@@ -59,8 +59,8 @@
 #  define VALGRIND_MAKE_MEM_UNDEFINED(p, n) VALGRIND_MAKE_WRITABLE((p), (n))
 # endif
 #else
-# define VALGRIND_MAKE_MEM_DEFINED(p, n) /* empty */
-# define VALGRIND_MAKE_MEM_UNDEFINED(p, n) /* empty */
+# define VALGRIND_MAKE_MEM_DEFINED(p, n) 0
+# define VALGRIND_MAKE_MEM_UNDEFINED(p, n) 0
 #endif
 
 #define rb_setjmp(env) RUBY_SETJMP(env)
@@ -225,7 +225,6 @@ typedef struct rb_objspace {
         struct heaps_free_bitmap *free_bitmap;
 	RVALUE *range[2];
 	struct heaps_header *freed;
-	size_t live_num;
 	size_t free_num;
 	size_t free_min;
 	size_t final_num;
@@ -251,6 +250,8 @@ typedef struct rb_objspace {
     } profile;
     struct gc_list *global_list;
     size_t count;
+    size_t total_allocated_object_num;
+    size_t total_freed_object_num;
     int gc_stress;
 
     struct mark_func_data_struct {
@@ -352,8 +353,6 @@ static inline void gc_prof_mark_timer_stop(rb_objspace_t *);
 static inline void gc_prof_sweep_timer_start(rb_objspace_t *);
 static inline void gc_prof_sweep_timer_stop(rb_objspace_t *);
 static inline void gc_prof_set_malloc_info(rb_objspace_t *);
-static inline void gc_prof_inc_live_num(rb_objspace_t *);
-static inline void gc_prof_dec_live_num(rb_objspace_t *);
 
 
 /*
@@ -531,7 +530,6 @@ assign_heap_slot(rb_objspace_t *objspace)
     objspace->heap.sorted[hi]->bits = (uintptr_t *)objspace->heap.free_bitmap;
     objspace->heap.free_bitmap = objspace->heap.free_bitmap->next;
     memset(heaps->bits, 0, HEAP_BITMAP_LIMIT * sizeof(uintptr_t));
-    objspace->heap.free_num += objs;
     pend = p + objs;
     if (lomem == 0 || lomem > p) lomem = p;
     if (himem < pend) himem = pend;
@@ -660,7 +658,7 @@ newobj(VALUE klass, VALUE flags)
     RANY(obj)->file = rb_sourcefile();
     RANY(obj)->line = rb_sourceline();
 #endif
-    gc_prof_inc_live_num(objspace);
+    objspace->total_allocated_object_num++;
 
     return obj;
 }
@@ -816,7 +814,7 @@ add_slot_local_freelist(rb_objspace_t *objspace, RVALUE *p)
 {
     struct heaps_slot *slot;
 
-    VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
+    (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
     p->as.free.flags = 0;
     slot = GET_HEAP_SLOT(p);
     p->as.free.next = slot->freelist;
@@ -1422,7 +1420,8 @@ finalize_list(rb_objspace_t *objspace, RVALUE *p)
 	if (!FL_TEST(p, FL_SINGLETON)) { /* not freeing page */
             add_slot_local_freelist(objspace, p);
             if (!is_lazy_sweeping(objspace)) {
-                gc_prof_dec_live_num(objspace);
+		objspace->total_freed_object_num++;
+		objspace->heap.free_num++;
             }
 	}
 	else {
@@ -1451,22 +1450,6 @@ rb_gc_finalize_deferred(void)
     if (ATOMIC_EXCHANGE(finalizing, 1)) return;
     finalize_deferred(objspace);
     ATOMIC_SET(finalizing, 0);
-}
-
-static int
-chain_finalized_object(st_data_t key, st_data_t val, st_data_t arg)
-{
-    RVALUE *p = (RVALUE *)key, **final_list = (RVALUE **)arg;
-    if ((p->as.basic.flags & FL_FINALIZE) == FL_FINALIZE &&
-        !MARKED_IN_BITMAP(GET_HEAP_BITMAP(p), p)) {
-	if (BUILTIN_TYPE(p) != T_ZOMBIE) {
-	    p->as.free.flags = T_ZOMBIE;
-	    RDATA(p)->dfree = 0;
-	}
-	p->as.free.next = *final_list;
-	*final_list = p;
-    }
-    return ST_CONTINUE;
 }
 
 struct force_finalize_list {
@@ -1505,15 +1488,9 @@ rb_objspace_call_finalizer(rb_objspace_t *objspace)
     if (ATOMIC_EXCHANGE(finalizing, 1)) return;
 
     /* run finalizers */
-    do {
-	finalize_deferred(objspace);
-	/* mark reachable objects from finalizers */
-	/* They might be not referred from any place here */
-	mark_tbl(objspace, finalizer_table);
-	gc_mark_stacked_objects(objspace);
-	st_foreach(finalizer_table, chain_finalized_object,
-		   (st_data_t)&deferred_final_list);
-    } while (deferred_final_list);
+    finalize_deferred(objspace);
+    assert(deferred_final_list == 0);
+
     /* force to run finalizer */
     while (finalizer_table->num_entries) {
 	struct force_finalize_list *list = 0;
@@ -1670,26 +1647,33 @@ id2ref(VALUE obj, VALUE objid)
  *  Document-method: object_id
  *
  *  call-seq:
- *     obj.__id__       -> fixnum
- *     obj.object_id    -> fixnum
+ *     obj.__id__       -> integer
+ *     obj.object_id    -> integer
  *
- *  Returns an integer identifier for <i>obj</i>. The same number will
- *  be returned on all calls to <code>id</code> for a given object, and
- *  no two active objects will share an id.
- *  <code>Object#object_id</code> is a different concept from the
- *  <code>:name</code> notation, which returns the symbol id of
- *  <code>name</code>. Replaces the deprecated <code>Object#id</code>.
+ *  Returns an integer identifier for +obj+.
+ *
+ *  The same number will be returned on all calls to +id+ for a given object,
+ *  and no two active objects will share an id.
+ *
+ *  Object#object_id is a different concept from the +:name+ notation, which
+ *  returns the symbol id of +name+.
+ *
+ *  Replaces the deprecated Object#id.
  */
 
 /*
  *  call-seq:
  *     obj.hash    -> fixnum
  *
- *  Generates a <code>Fixnum</code> hash value for this object. This
- *  function must have the property that <code>a.eql?(b)</code> implies
- *  <code>a.hash == b.hash</code>. The hash value is used by class
- *  <code>Hash</code>. Any hash value that exceeds the capacity of a
- *  <code>Fixnum</code> will be truncated before being used.
+ *  Generates a Fixnum hash value for this object.
+ *
+ *  This function must have the property that <code>a.eql?(b)</code> implies
+ *  <code>a.hash == b.hash</code>.
+ *
+ *  The hash value is used by Hash class.
+ *
+ *  Any hash value that exceeds the capacity of a Fixnum will be truncated
+ *  before being used.
  */
 
 VALUE
@@ -1754,17 +1738,22 @@ set_zero(st_data_t key, st_data_t val, st_data_t arg)
  *
  *  Counts objects for each type.
  *
- *  It returns a hash as:
- *  {:TOTAL=>10000, :FREE=>3011, :T_OBJECT=>6, :T_CLASS=>404, ...}
+ *  It returns a hash, such as:
+ *	{
+ *	  :TOTAL=>10000,
+ *	  :FREE=>3011,
+ *	  :T_OBJECT=>6,
+ *	  :T_CLASS=>404,
+ *	  # ...
+ *	}
  *
- *  If the optional argument, result_hash, is given,
- *  it is overwritten and returned.
- *  This is intended to avoid probe effect.
- *
- *  The contents of the returned hash is implementation defined.
+ *  The contents of the returned hash are implementation specific.
  *  It may be changed in future.
  *
- *  This method is not expected to work except C Ruby.
+ *  If the optional argument +result_hash+ is given,
+ *  it is overwritten and returned. This is intended to avoid probe effect.
+ *
+ *  This method is only expected to work on C Ruby.
  *
  */
 
@@ -1873,10 +1862,16 @@ gc_clear_slot_bits(struct heaps_slot *slot)
     memset(slot->bits, 0, HEAP_BITMAP_LIMIT * sizeof(uintptr_t));
 }
 
+static size_t
+objspace_live_num(rb_objspace_t *objspace)
+{
+    return objspace->total_allocated_object_num - objspace->total_freed_object_num;
+}
+
 static void
 slot_sweep(rb_objspace_t *objspace, struct heaps_slot *sweep_slot)
 {
-    size_t free_num = 0, final_num = 0;
+    size_t empty_num = 0, freed_num = 0, final_num = 0;
     RVALUE *p, *pend;
     RVALUE *final = deferred_final_list;
     int deferred;
@@ -1899,21 +1894,21 @@ slot_sweep(rb_objspace_t *objspace, struct heaps_slot *sweep_slot)
                     final_num++;
                 }
                 else {
-                    VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
+                    (void)VALGRIND_MAKE_MEM_UNDEFINED((void*)p, sizeof(RVALUE));
                     p->as.free.flags = 0;
                     p->as.free.next = sweep_slot->freelist;
                     sweep_slot->freelist = p;
-                    free_num++;
+                    freed_num++;
                 }
             }
             else {
-                free_num++;
+                empty_num++;
             }
         }
         p++;
     }
     gc_clear_slot_bits(sweep_slot);
-    if (final_num + free_num == sweep_slot->header->limit &&
+    if (final_num + freed_num + empty_num == sweep_slot->header->limit &&
         objspace->heap.free_num > objspace->heap.do_heap_free) {
         RVALUE *pp;
 
@@ -1925,13 +1920,14 @@ slot_sweep(rb_objspace_t *objspace, struct heaps_slot *sweep_slot)
         unlink_heap_slot(objspace, sweep_slot);
     }
     else {
-        if (free_num > 0) {
+        if (freed_num + empty_num > 0) {
             link_free_heap_slot(objspace, sweep_slot);
         }
         else {
             sweep_slot->free_next = NULL;
         }
-        objspace->heap.free_num += free_num;
+	objspace->total_freed_object_num += freed_num;
+	objspace->heap.free_num += freed_num + empty_num;
     }
     objspace->heap.final_num += final_num;
 
@@ -1990,7 +1986,8 @@ after_gc_sweep(rb_objspace_t *objspace)
 
     inc = ATOMIC_SIZE_EXCHANGE(malloc_increase, 0);
     if (inc > malloc_limit) {
-	malloc_limit += (size_t)((inc - malloc_limit) * (double)objspace->heap.live_num / (heaps_used * HEAP_OBJ_LIMIT));
+	malloc_limit +=
+	  (size_t)((inc - malloc_limit) * (double)objspace_live_num(objspace) / (heaps_used * HEAP_OBJ_LIMIT));
 	if (malloc_limit < initial_malloc_limit) malloc_limit = initial_malloc_limit;
     }
 
@@ -2063,7 +2060,7 @@ gc_prepare_free_objects(rb_objspace_t *objspace)
     gc_marks(objspace);
 
     before_gc_sweep(objspace);
-    if (objspace->heap.free_min > (heaps_used * HEAP_OBJ_LIMIT - objspace->heap.live_num)) {
+    if (objspace->heap.free_min > (heaps_used * HEAP_OBJ_LIMIT - objspace_live_num(objspace))) {
 	set_heaps_increment(objspace);
     }
 
@@ -2313,7 +2310,7 @@ mark_locations_array(rb_objspace_t *objspace, register VALUE *x, register long n
     VALUE v;
     while (n--) {
         v = *x;
-        VALGRIND_MAKE_MEM_DEFINED(&v, sizeof(v));
+        (void)VALGRIND_MAKE_MEM_DEFINED(&v, sizeof(v));
 	if (is_pointer_to_heap(objspace, (void *)v)) {
 	    gc_mark(objspace, v);
 	}
@@ -2544,7 +2541,6 @@ gc_mark_ptr(rb_objspace_t *objspace, VALUE ptr)
     register uintptr_t *bits = GET_HEAP_BITMAP(ptr);
     if (MARKED_IN_BITMAP(bits, ptr)) return 0;
     MARK_IN_BITMAP(bits, ptr);
-    objspace->heap.live_num++;
     return 1;
 }
 
@@ -2905,10 +2901,7 @@ gc_marks(rb_objspace_t *objspace)
     objspace->mark_func_data = 0;
 
     gc_prof_mark_timer_start(objspace);
-
-    objspace->heap.live_num = 0;
     objspace->count++;
-
 
     SET_STACK_END;
 
@@ -2956,7 +2949,8 @@ rb_gc_force_recycle(VALUE p)
         add_slot_local_freelist(objspace, (RVALUE *)p);
     }
     else {
-        gc_prof_dec_live_num(objspace);
+	objspace->total_freed_object_num++;
+	objspace->heap.free_num++;
         slot = add_slot_local_freelist(objspace, (RVALUE *)p);
         if (slot->free_next == NULL) {
             link_free_heap_slot(objspace, slot);
@@ -3132,17 +3126,19 @@ gc_count(VALUE self)
  *
  *  The hash includes information about internal statistics about GC such as:
  *
- *    {
- *      :count          => 18,
- *      :heap_used      => 77,
- *      :heap_length    => 77,
- *      :heap_increment => 0,
- *      :heap_live_num  => 23287,
- *      :heap_free_num  => 8115,
- *      :heap_final_num => 0,
- *    }
+ *	{
+ *	    :count=>0,
+ *	    :heap_used=>12,
+ *     	    :heap_length=>12,
+ *     	    :heap_increment=>0,
+ *     	    :heap_live_num=>7539,
+ *     	    :heap_free_num=>88,
+ *     	    :heap_final_num=>0,
+ *     	    :total_allocated_object=>7630,
+ *     	    :total_freed_object=>88
+ *	}
  *
- *  The contents of the hash are implementation defined and may be changed in
+ *  The contents of the hash are implementation specific and may be changed in
  *  the future.
  *
  *  This method is only expected to work on C Ruby.
@@ -3154,6 +3150,21 @@ gc_stat(int argc, VALUE *argv, VALUE self)
 {
     rb_objspace_t *objspace = &rb_objspace;
     VALUE hash;
+    static VALUE sym_count;
+    static VALUE sym_heap_used, sym_heap_length, sym_heap_increment;
+    static VALUE sym_heap_live_num, sym_heap_free_num, sym_heap_final_num;
+    static VALUE sym_total_allocated_object, sym_total_freed_object;
+    if (sym_count == 0) {
+	sym_count = ID2SYM(rb_intern_const("count"));
+	sym_heap_used = ID2SYM(rb_intern_const("heap_used"));
+	sym_heap_length = ID2SYM(rb_intern_const("heap_length"));
+	sym_heap_increment = ID2SYM(rb_intern_const("heap_increment"));
+	sym_heap_live_num = ID2SYM(rb_intern_const("heap_live_num"));
+	sym_heap_free_num = ID2SYM(rb_intern_const("heap_free_num"));
+	sym_heap_final_num = ID2SYM(rb_intern_const("heap_final_num"));
+	sym_total_allocated_object = ID2SYM(rb_intern_const("total_allocated_object"));
+	sym_total_freed_object = ID2SYM(rb_intern_const("total_freed_object"));
+    }
 
     if (rb_scan_args(argc, argv, "01", &hash) == 1) {
         if (!RB_TYPE_P(hash, T_HASH))
@@ -3166,23 +3177,25 @@ gc_stat(int argc, VALUE *argv, VALUE self)
 
     rest_sweep(objspace);
 
-    rb_hash_aset(hash, ID2SYM(rb_intern("count")), SIZET2NUM(objspace->count));
-
+    rb_hash_aset(hash, sym_count, SIZET2NUM(objspace->count));
     /* implementation dependent counters */
-    rb_hash_aset(hash, ID2SYM(rb_intern("heap_used")), SIZET2NUM(objspace->heap.used));
-    rb_hash_aset(hash, ID2SYM(rb_intern("heap_length")), SIZET2NUM(objspace->heap.length));
-    rb_hash_aset(hash, ID2SYM(rb_intern("heap_increment")), SIZET2NUM(objspace->heap.increment));
-    rb_hash_aset(hash, ID2SYM(rb_intern("heap_live_num")), SIZET2NUM(objspace->heap.live_num));
-    rb_hash_aset(hash, ID2SYM(rb_intern("heap_free_num")), SIZET2NUM(objspace->heap.free_num));
-    rb_hash_aset(hash, ID2SYM(rb_intern("heap_final_num")), SIZET2NUM(objspace->heap.final_num));
+    rb_hash_aset(hash, sym_heap_used, SIZET2NUM(objspace->heap.used));
+    rb_hash_aset(hash, sym_heap_length, SIZET2NUM(objspace->heap.length));
+    rb_hash_aset(hash, sym_heap_increment, SIZET2NUM(objspace->heap.increment));
+    rb_hash_aset(hash, sym_heap_live_num, SIZET2NUM(objspace_live_num(objspace)));
+    rb_hash_aset(hash, sym_heap_free_num, SIZET2NUM(objspace->heap.free_num));
+    rb_hash_aset(hash, sym_heap_final_num, SIZET2NUM(objspace->heap.final_num));
+    rb_hash_aset(hash, sym_total_allocated_object, SIZET2NUM(objspace->total_allocated_object_num));
+    rb_hash_aset(hash, sym_total_freed_object, SIZET2NUM(objspace->total_freed_object_num));
+
     return hash;
 }
 
 /*
  *  call-seq:
- *    GC.stress                 -> true or false
+ *    GC.stress	    -> true or false
  *
- *  returns current status of GC stress mode.
+ *  Returns current status of GC stress mode.
  */
 
 static VALUE
@@ -3198,10 +3211,10 @@ gc_stress_get(VALUE self)
  *
  *  Updates the GC stress mode.
  *
- *  When stress mode is enabled the GC is invoked at every GC opportunity:
+ *  When stress mode is enabled, the GC is invoked at every GC opportunity:
  *  all memory and object allocations.
  *
- *  Enabling stress mode makes Ruby very slow, it is only for debugging.
+ *  Enabling stress mode will degrade performance, it is only for debugging.
  */
 
 static VALUE
@@ -3217,7 +3230,7 @@ gc_stress_set(VALUE self, VALUE flag)
  *  call-seq:
  *     GC.enable    -> true or false
  *
- *  Enables garbage collection, returning <code>true</code> if garbage
+ *  Enables garbage collection, returning +true+ if garbage
  *  collection was previously disabled.
  *
  *     GC.disable   #=> false
@@ -3240,7 +3253,7 @@ rb_gc_enable(void)
  *  call-seq:
  *     GC.disable    -> true or false
  *
- *  Disables garbage collection, returning <code>true</code> if garbage
+ *  Disables garbage collection, returning +true+ if garbage
  *  collection was already disabled.
  *
  *     GC.disable   #=> false
@@ -3639,8 +3652,9 @@ ruby_mimmalloc(size_t size)
  *  call-seq:
  *     GC.malloc_allocated_size -> Integer
  *
- *  Returns the size of memory allocated by malloc().  Only available if ruby
- *  was built with CALC_EXACT_MALLOC_SIZE.
+ *  Returns the size of memory allocated by malloc().
+ *
+ *  Only available if ruby was built with +CALC_EXACT_MALLOC_SIZE+.
  */
 
 static VALUE
@@ -3653,8 +3667,9 @@ gc_malloc_allocated_size(VALUE self)
  *  call-seq:
  *     GC.malloc_allocations -> Integer
  *
- *  Returns the number of malloc() allocations.  Only available if ruby was
- *  built with CALC_EXACT_MALLOC_SIZE.
+ *  Returns the number of malloc() allocations.
+ *
+ *  Only available if ruby was built with +CALC_EXACT_MALLOC_SIZE+.
  */
 
 static VALUE
@@ -3752,7 +3767,7 @@ wmap_final_func(st_data_t *key, st_data_t *value, st_data_t arg, int existing)
     VALUE wmap, ary;
     if (!existing) return ST_STOP;
     wmap = (VALUE)arg, ary = (VALUE)*value;
-    rb_ary_delete_same_obj(ary, wmap);
+    rb_ary_delete_same(ary, wmap);
     if (!RARRAY_LEN(ary)) return ST_DELETE;
     return ST_CONTINUE;
 }
@@ -3787,6 +3802,7 @@ wmap_finalize(VALUE self, VALUE objid)
     return self;
 }
 
+/* Creates a weak reference from the given key to the given value */
 static VALUE
 wmap_aset(VALUE self, VALUE wmap, VALUE orig)
 {
@@ -3809,6 +3825,7 @@ wmap_aset(VALUE self, VALUE wmap, VALUE orig)
     return nonspecial_obj_id(orig);
 }
 
+/* Retrieves a weakly referenced object with the given key */
 static VALUE
 wmap_aref(VALUE self, VALUE wmap)
 {
@@ -3952,22 +3969,12 @@ gc_prof_set_malloc_info(rb_objspace_t *objspace)
 static inline void
 gc_prof_set_heap_info(rb_objspace_t *objspace, gc_profile_record *record)
 {
-    size_t live = objspace->heap.live_num;
+    size_t live = objspace_live_num(objspace);
     size_t total = heaps_used * HEAP_OBJ_LIMIT;
 
     record->heap_total_objects = total;
     record->heap_use_size = live * sizeof(RVALUE);
     record->heap_total_size = total * sizeof(RVALUE);
-}
-
-static inline void
-gc_prof_inc_live_num(rb_objspace_t *objspace)
-{
-}
-
-static inline void
-gc_prof_dec_live_num(rb_objspace_t *objspace)
-{
 }
 
 #else
@@ -4059,18 +4066,6 @@ gc_prof_set_heap_info(rb_objspace_t *objspace, gc_profile_record *record)
     record->heap_total_size = total * sizeof(RVALUE);
 }
 
-static inline void
-gc_prof_inc_live_num(rb_objspace_t *objspace)
-{
-    objspace->heap.live_num++;
-}
-
-static inline void
-gc_prof_dec_live_num(rb_objspace_t *objspace)
-{
-    objspace->heap.live_num--;
-}
-
 #endif /* !GC_PROFILE_MORE_DETAIL */
 
 
@@ -4101,28 +4096,51 @@ gc_profile_clear(void)
 
 /*
  *  call-seq:
- *     GC::Profiler.raw_data -> [Hash, ...]
+ *     GC::Profiler.raw_data	-> [Hash, ...]
  *
  *  Returns an Array of individual raw profile data Hashes ordered
- *  from earliest to latest by <tt>:GC_INVOKE_TIME</tt>.  For example:
+ *  from earliest to latest by +:GC_INVOKE_TIME+.
  *
- *    [{:GC_TIME=>1.3000000000000858e-05,
- *      :GC_INVOKE_TIME=>0.010634999999999999,
- *      :HEAP_USE_SIZE=>289640,
- *      :HEAP_TOTAL_SIZE=>588960,
- *      :HEAP_TOTAL_OBJECTS=>14724,
- *      :GC_IS_MARKED=>false},
- *      ...
+ *  For example:
+ *
+ *    [
+ *	{
+ *	   :GC_TIME=>1.3000000000000858e-05,
+ *	   :GC_INVOKE_TIME=>0.010634999999999999,
+ *	   :HEAP_USE_SIZE=>289640,
+ *	   :HEAP_TOTAL_SIZE=>588960,
+ *	   :HEAP_TOTAL_OBJECTS=>14724,
+ *	   :GC_IS_MARKED=>false
+ *	},
+ *      # ...
  *    ]
  *
  *  The keys mean:
  *
- *  +:GC_TIME+:: Time taken for this run in seconds
- *  +:GC_INVOKE_TIME+:: Time the GC was invoked since startup in seconds
- *  +:HEAP_USE_SIZE+:: Bytes of heap used
- *  +:HEAP_TOTAL_SIZE+:: Size of heap in bytes
- *  +:HEAP_TOTAL_OBJECTS+:: Number of objects
- *  +:GC_IS_MARKED+:: Is the GC in the mark phase
+ *  +:GC_TIME+::
+ *	Time elapsed in seconds for this GC run
+ *  +:GC_INVOKE_TIME+::
+ *	Time elapsed in seconds from startup to when the GC was invoked
+ *  +:HEAP_USE_SIZE+::
+ *	Total bytes of heap used
+ *  +:HEAP_TOTAL_SIZE+::
+ *	Total size of heap in bytes
+ *  +:HEAP_TOTAL_OBJECTS+::
+ *	Total number of objects
+ *  +:GC_IS_MARKED+::
+ *	Returns +true+ if the GC is in mark phase
+ *
+ *  If ruby was built with +GC_PROFILE_MORE_DETAIL+, you will also have access
+ *  to the following hash keys:
+ *
+ *  +:GC_MARK_TIME+::
+ *  +:GC_SWEEP_TIME+::
+ *  +:ALLOCATE_INCREASE+::
+ *  +:ALLOCATE_LIMIT+::
+ *  +:HEAP_USE_SLOTS+::
+ *  +:HEAP_LIVE_OBJECTS+::
+ *  +:HEAP_FREE_OBJECTS+::
+ *  +:HAVE_FINALIZE+::
  *
  */
 
@@ -4204,7 +4222,7 @@ gc_profile_dump_on(VALUE out, VALUE (*append)(VALUE, VALUE))
 
 /*
  *  call-seq:
- *     GC::Profiler.result -> String
+ *     GC::Profiler.result  -> String
  *
  *  Returns a profile data report such as:
  *
@@ -4224,9 +4242,9 @@ gc_profile_result(void)
 /*
  *  call-seq:
  *     GC::Profiler.report
- *     GC::Profiler.report io
+ *     GC::Profiler.report(io)
  *
- *  Writes the GC::Profiler#result to <tt>$stdout</tt> or the given IO object.
+ *  Writes the GC::Profiler.result to <tt>$stdout</tt> or the given IO object.
  *
  */
 
@@ -4248,7 +4266,7 @@ gc_profile_report(int argc, VALUE *argv, VALUE self)
 
 /*
  *  call-seq:
- *     GC::Profiler.total_time -> float
+ *     GC::Profiler.total_time	-> float
  *
  *  The total time used for garbage collection in seconds
  */
@@ -4270,7 +4288,7 @@ gc_profile_total_time(VALUE self)
 
 /*
  *  call-seq:
- *    GC::Profiler.enabled?                 -> true or false
+ *    GC::Profiler.enabled?	-> true or false
  *
  *  The current status of GC profile mode.
  */
@@ -4284,7 +4302,7 @@ gc_profile_enable_get(VALUE self)
 
 /*
  *  call-seq:
- *    GC::Profiler.enable          -> nil
+ *    GC::Profiler.enable	-> nil
  *
  *  Starts the GC profiler.
  *
@@ -4301,7 +4319,7 @@ gc_profile_enable(void)
 
 /*
  *  call-seq:
- *    GC::Profiler.disable          -> nil
+ *    GC::Profiler.disable	-> nil
  *
  *  Stops the GC profiler.
  *
@@ -4364,27 +4382,25 @@ rb_gcdebug_sentinel(VALUE obj, const char *name)
 /*
  * Document-class: ObjectSpace
  *
- *  The <code>ObjectSpace</code> module contains a number of routines
+ *  The ObjectSpace module contains a number of routines
  *  that interact with the garbage collection facility and allow you to
  *  traverse all living objects with an iterator.
  *
- *  <code>ObjectSpace</code> also provides support for object
- *  finalizers, procs that will be called when a specific object is
- *  about to be destroyed by garbage collection.
+ *  ObjectSpace also provides support for object finalizers, procs that will be
+ *  called when a specific object is about to be destroyed by garbage
+ *  collection.
  *
  *     include ObjectSpace
- *
  *
  *     a = "A"
  *     b = "B"
  *     c = "C"
  *
- *
  *     define_finalizer(a, proc {|id| puts "Finalizer one on #{id}" })
  *     define_finalizer(a, proc {|id| puts "Finalizer two on #{id}" })
  *     define_finalizer(b, proc {|id| puts "Finalizer three on #{id}" })
  *
- *  <em>produces:</em>
+ *  _produces:_
  *
  *     Finalizer three on 537763470
  *     Finalizer one on 537763480
@@ -4395,8 +4411,11 @@ rb_gcdebug_sentinel(VALUE obj, const char *name)
 /*
  *  Document-class: ObjectSpace::WeakMap
  *
- *  An <code>ObjectSpace::WeakMap</code> object holds references to
- *  any objects, but those objects can get disposed by GC.
+ *  An ObjectSpace::WeakMap object holds references to
+ *  any objects, but those objects can get be garbage collected.
+ *
+ *  This class is mostly used internally by WeakRef, please use
+ *  +lib/weakref.rb+ for the public interface.
  */
 
 /*  Document-class: GC::Profiler
@@ -4410,7 +4429,7 @@ rb_gcdebug_sentinel(VALUE obj, const char *name)
  *
  *    require 'rdoc/rdoc'
  *
- *    puts GC::Profiler.result
+ *    GC::Profiler.report
  *
  *    GC::Profiler.disable
  *
@@ -4418,9 +4437,11 @@ rb_gcdebug_sentinel(VALUE obj, const char *name)
  */
 
 /*
- *  The <code>GC</code> module provides an interface to Ruby's mark and
- *  sweep garbage collection mechanism. Some of the underlying methods
- *  are also available via the ObjectSpace module.
+ *  The GC module provides an interface to Ruby's mark and
+ *  sweep garbage collection mechanism.
+ *
+ *  Some of the underlying methods are also available via the ObjectSpace
+ *  module.
  *
  *  You may obtain information about the operation of the GC through
  *  GC::Profiler.

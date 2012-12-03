@@ -190,7 +190,9 @@ rb_method_entry_make(VALUE klass, ID mid, rb_method_type_t type,
     if (!FL_TEST(klass, FL_SINGLETON) &&
 	type != VM_METHOD_TYPE_NOTIMPLEMENTED &&
 	type != VM_METHOD_TYPE_ZSUPER &&
-	(mid == rb_intern("initialize") || mid == rb_intern("initialize_copy"))) {
+	(mid == idInitialize || mid == idInitialize_copy ||
+	 mid == idInitialize_clone || mid == idInitialize_dup ||
+	 mid == idRespond_to_missing)) {
 	noex = NOEX_PRIVATE | noex;
     }
 
@@ -1428,12 +1430,15 @@ static inline int
 basic_obj_respond_to(VALUE obj, ID id, int pub)
 {
     VALUE klass = CLASS_OF(obj);
+    VALUE args[2];
 
     switch (rb_method_boundp(klass, id, pub|NOEX_RESPONDS)) {
       case 2:
 	return FALSE;
       case 0:
-	return RTEST(rb_funcall(obj, respond_to_missing, 2, ID2SYM(id), pub ? Qfalse : Qtrue));
+	args[0] = ID2SYM(id);
+	args[1] = pub ? Qfalse : Qtrue;
+	return RTEST(rb_funcall2(obj, respond_to_missing, 2, args));
       default:
 	return TRUE;
     }
@@ -1499,6 +1504,8 @@ obj_respond_to(int argc, VALUE *argv, VALUE obj)
 /*
  *  call-seq:
  *     obj.respond_to_missing?(symbol, include_all) -> true or false
+ *
+ *  DO NOT USE THIS DIRECTLY.
  *
  *  Hook method to return whether the _obj_ can respond to _id_ method
  *  or not.

@@ -512,6 +512,8 @@ enum ruby_value_type {
 static inline int rb_type(VALUE obj);
 #define TYPE(x) rb_type((VALUE)(x))
 
+/* RB_GC_GUARD_PTR() is an intermediate macro, and has no effect by
+ * itself.  don't use it directly */
 #ifdef __GNUC__
 #define RB_GC_GUARD_PTR(ptr) \
     __extension__ ({volatile VALUE *rb_gc_guarded_ptr = (ptr); rb_gc_guarded_ptr;})
@@ -1574,7 +1576,15 @@ int ruby_native_thread_p(void);
 #define RUBY_EVENT_SWITCH   0x20000
 #define RUBY_EVENT_COVERAGE 0x40000
 
-typedef unsigned int rb_event_flag_t;
+/* for TracePoint extended events */
+#define RUBY_EVENT_B_CALL          0x0100
+#define RUBY_EVENT_B_RETURN        0x0200
+#define RUBY_EVENT_THREAD_BEGIN    0x0400
+#define RUBY_EVENT_THREAD_END      0x0800
+#define RUBY_EVENT_SPECIFIED_LINE  0x8000
+#define RUBY_EVENT_TRACEPOINT_ALL  0xFFFF
+
+typedef unsigned long rb_event_flag_t;
 typedef void (*rb_event_hook_func_t)(rb_event_flag_t evflag, VALUE data, VALUE self, ID mid, VALUE klass);
 
 #define RB_EVENT_HOOKS_HAVE_CALLBACK_DATA 1

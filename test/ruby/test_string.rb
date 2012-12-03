@@ -170,8 +170,9 @@ class TestString < Test::Unit::TestCase
 
     o = Object.new
     def o.to_str; "bar"; end
-    assert_nil("foo" <=> o)
+    assert_equal(1, "foo" <=> o)
 
+    class << o;remove_method :to_str;end
     def o.<=>(x); nil; end
     assert_nil("foo" <=> o)
 
@@ -181,7 +182,7 @@ class TestString < Test::Unit::TestCase
 
     class << o;remove_method :<=>;end
     def o.<=>(x); 2**100; end
-    assert_equal(-(2**100), "foo" <=> o)
+    assert_equal(-1, "foo" <=> o)
   end
 
   def test_EQUAL # '=='

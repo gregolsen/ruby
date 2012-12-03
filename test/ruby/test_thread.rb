@@ -120,168 +120,6 @@ class TestThread < Test::Unit::TestCase
     assert_equal(max * max * max, r)
   end
 
-  def test_condvar
-    mutex = Mutex.new
-    condvar = ConditionVariable.new
-    result = []
-    mutex.synchronize do
-      t = Thread.new do
-        mutex.synchronize do
-          result << 1
-          condvar.signal
-        end
-      end
-
-      result << 0
-      condvar.wait(mutex)
-      result << 2
-      t.join
-    end
-    assert_equal([0, 1, 2], result)
-  end
-
-  def test_condvar_wait_exception_handling
-    # Calling wait in the only thread running should raise a ThreadError of
-    # 'stopping only thread'
-    mutex = Mutex.new
-    condvar = ConditionVariable.new
-
-    locked = false
-    thread = Thread.new do
-      Thread.current.abort_on_exception = false
-      mutex.synchronize do
-        begin
-          condvar.wait(mutex)
-        rescue Exception
-          locked = mutex.locked?
-          raise
-        end
-      end
-    end
-
-    until thread.stop?
-      sleep(0.1)
-    end
-
-    thread.raise Interrupt, "interrupt a dead condition variable"
-    assert_raise(Interrupt) { thread.value }
-    assert(locked)
-  end
-
-  def test_condvar_wait_and_broadcast
-    nr_threads = 3
-    threads = Array.new
-    mutex = Mutex.new
-    condvar = ConditionVariable.new
-    result = []
-
-    nr_threads.times do |i|
-      threads[i] = Thread.new do
-        mutex.synchronize do
-          result << "C1"
-          condvar.wait mutex
-          result << "C2"
-        end
-      end
-    end
-    sleep 0.1
-    mutex.synchronize do
-      result << "P1"
-      condvar.broadcast
-      result << "P2"
-    end
-    nr_threads.times do |i|
-      threads[i].join
-    end
-
-    assert_equal ["C1", "C1", "C1", "P1", "P2", "C2", "C2", "C2"], result
-  end
-
-#  Hmm.. don't we have a way of catch fatal exception?
-#
-#  def test_cv_wait_deadlock
-#    mutex = Mutex.new
-#    cv = ConditionVariable.new
-#
-#    assert_raise(fatal) {
-#      mutex.lock
-#      cv.wait mutex
-#      mutex.unlock
-#    }
-#  end
-
-  def test_condvar_wait_deadlock_2
-    nr_threads = 3
-    threads = Array.new
-    mutex = Mutex.new
-    condvar = ConditionVariable.new
-
-    nr_threads.times do |i|
-      if (i != 0)
-        mutex.unlock
-      end
-      threads[i] = Thread.new do
-        mutex.synchronize do
-          condvar.wait mutex
-        end
-      end
-      mutex.lock
-    end
-
-    assert_raise(Timeout::Error) do
-      Timeout.timeout(0.1) { condvar.wait mutex }
-    end
-    mutex.unlock
-    threads.each(&:kill)
-    threads.each(&:join)
-  end
-
-  def test_condvar_timed_wait
-    mutex = Mutex.new
-    condvar = ConditionVariable.new
-    timeout = 0.3
-    locked = false
-
-    t0 = Time.now
-    mutex.synchronize do
-      begin
-        condvar.wait(mutex, timeout)
-      ensure
-        locked = mutex.locked?
-      end
-    end
-    t1 = Time.now
-    t = t1-t0
-
-    assert_operator(timeout*0.9, :<, t)
-    assert(locked)
-  end
-
-  def test_condvar_nolock
-    mutex = Mutex.new
-    condvar = ConditionVariable.new
-
-    assert_raise(ThreadError) {condvar.wait(mutex)}
-  end
-
-  def test_condvar_nolock_2
-    mutex = Mutex.new
-    condvar = ConditionVariable.new
-
-    Thread.new do
-      assert_raise(ThreadError) {condvar.wait(mutex)}
-    end.join
-  end
-
-  def test_condvar_nolock_3
-    mutex = Mutex.new
-    condvar = ConditionVariable.new
-
-    Thread.new do
-      assert_raise(ThreadError) {condvar.wait(mutex, 0.1)}
-    end.join
-  end
-
   def test_local_barrier
     dir = File.dirname(__FILE__)
     lbtest = File.join(dir, "lbtest.rb")
@@ -497,7 +335,6 @@ class TestThread < Test::Unit::TestCase
     a = ::Thread.new { raise("die now") }
     b = Thread.new { Thread.stop }
     c = Thread.new { Thread.exit }
-    d = Thread.new { sleep }
     e = Thread.current
     sleep 0.5
 
@@ -511,21 +348,14 @@ class TestThread < Test::Unit::TestCase
     assert_match(/^#<TestThread::Thread:.* dead>$/, c.inspect)
     assert(c.stop?)
 
-    d.kill
-    # to avoid thread switching...
-    ds1 = d.status
-    ds2 = d.stop?
     es1 = e.status
     es2 = e.stop?
-    assert_equal(["aborting", false], [ds1, ds2])
-
     assert_equal(["run", false], [es1, es2])
 
   ensure
     a.kill if a
     b.kill if b
     c.kill if c
-    d.kill if d
   end
 
   def test_safe_level
@@ -686,12 +516,12 @@ class TestThread < Test::Unit::TestCase
     assert_equal("Can't call on top of Fiber or Thread", error.message, bug5083)
   end
 
-  def make_control_interrupt_test_thread1 flag
+  def make_async_interrupt_timing_test_thread1 flag
     r = []
     ready_p = false
     th = Thread.new{
       begin
-        Thread.control_interrupt(RuntimeError => flag){
+        Thread.async_interrupt_timing(RuntimeError => flag){
           begin
             ready_p = true
             sleep 0.5
@@ -713,18 +543,30 @@ class TestThread < Test::Unit::TestCase
     r
   end
 
-  def test_control_interrupt
-    [[:never, :c2],
+  def test_async_interrupt_timing
+    [[:defer, :c2],
      [:immediate, :c1],
      [:on_blocking, :c1]].each{|(flag, c)|
-      assert_equal([flag, c], [flag] + make_control_interrupt_test_thread1(flag))
+      assert_equal([flag, c], [flag] + make_async_interrupt_timing_test_thread1(flag))
     }
     # TODO: complex cases are needed.
   end
 
-  def test_check_interrupt
+  def test_async_interrupt_timing_invalid_argument
+    assert_raise(ArgumentError) {
+      Thread.async_interrupt_timing(RuntimeError => :immediate) # no block
+    }
+    assert_raise(ArgumentError) {
+      Thread.async_interrupt_timing(RuntimeError => :never) {} # never?
+    }
+    assert_raise(TypeError) {
+      Thread.async_interrupt_timing([]) {} # array
+    }
+  end
+
+  def test_async_interrupted?
     q = Queue.new
-    Thread.control_interrupt(RuntimeError => :never){
+    Thread.async_interrupt_timing(RuntimeError => :defer){
       th = Thread.new{
         q.push :e
         begin
@@ -734,7 +576,7 @@ class TestThread < Test::Unit::TestCase
             q.push :ng1
           end
           begin
-            Thread.check_interrupt
+            Thread.async_interrupt_timing(Object => :immediate){} if Thread.async_interrupted?
           rescue => e
             q.push :ok
           end
@@ -862,5 +704,97 @@ class TestThreadGroup < Test::Unit::TestCase
                    "[s.exited?, s.signaled?, s.stopped?, s.termsig]")
     end
     assert_in_delta(t1 - t0, 1, 1, bug5757)
+  end
+
+  def test_thread_join_in_trap
+    assert_nothing_raised{
+      t = Thread.new{ sleep 0.2; Process.kill(:INT, $$) }
+
+      Signal.trap :INT do
+        t.join
+      end
+
+      t.join
+    }
+
+    assert_equal(:normal_end,
+                 begin
+                   t = Thread.new{ sleep 0.2; Process.kill(:INT, $$); :normal_end }
+
+                   Signal.trap :INT do
+                     t.value
+                   end
+                   t.value
+                 end
+                 )
+  end
+
+  def test_thread_join_current
+    assert_raises(ThreadError) do
+      Thread.current.join
+    end
+  end
+
+  def test_thread_join_main_thread
+    assert_raises(ThreadError) do
+      Thread.new(Thread.current) {|t|
+        t.join
+      }.join
+    end
+  end
+
+  def test_main_thread_status_at_exit
+    assert_in_out_err([], <<-INPUT, %w(false), [])
+Thread.new(Thread.current) {|mth|
+  begin
+    sleep 0.1
+  ensure
+    p mth.alive?
+  end
+}
+    INPUT
+  end
+
+  def test_thread_status_in_trap
+    # when running trap handler, Thread#status must show "run"
+    # Even though interrupted from sleeping function
+    assert_in_out_err([], <<-INPUT, %w(sleep run), [])
+      Signal.trap(:INT) {
+        puts Thread.current.status
+      }
+
+      Thread.new(Thread.current) {|mth|
+        sleep 0.01
+        puts mth.status
+        Process.kill(:INT, $$)
+      }
+      sleep 0.1
+    INPUT
+  end
+
+  # Bug #7450
+  def test_thread_status_raise_after_kill
+    ary = []
+
+    t = Thread.new {
+      begin
+        ary << Thread.current.status
+        sleep
+      ensure
+        begin
+          ary << Thread.current.status
+          sleep
+        ensure
+          ary << Thread.current.status
+        end
+      end
+    }
+
+    sleep 0.01
+    t.kill
+    sleep 0.01
+    t.raise
+    sleep 0.01
+    assert_equal(ary, ["run", "aborting", "aborting"])
   end
 end

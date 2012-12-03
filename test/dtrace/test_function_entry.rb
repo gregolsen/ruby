@@ -4,7 +4,7 @@ module DTrace
   class TestFunctionEntry < TestCase
     def test_function_entry
       probe = <<-eoprobe
-ruby$target:::function-entry
+ruby$target:::method-entry
 /arg0 && arg1 && arg2/
 {
   printf("%s %s %s %d\\n", copyinstr(arg0), copyinstr(arg1), copyinstr(arg2), arg3);
@@ -25,7 +25,7 @@ ruby$target:::function-entry
 
     def test_function_return
       probe = <<-eoprobe
-ruby$target:::function-return
+ruby$target:::method-return
 /arg0 && arg1 && arg2/
 {
   printf("%s %s %s %d\\n", copyinstr(arg0), copyinstr(arg1), copyinstr(arg2), arg3);
@@ -44,6 +44,35 @@ ruby$target:::function-return
       }
     end
 
+    def test_return_from_raise
+      program = <<-eoruby
+      class Foo
+        def bar; raise; end
+        def baz
+          bar
+        rescue
+        end
+      end
+
+      Foo.new.baz
+      eoruby
+
+      probe = <<-eoprobe
+ruby$target:::method-return
+/arg0 && arg1 && arg2/
+{
+  printf("%s %s %s %d\\n", copyinstr(arg0), copyinstr(arg1), copyinstr(arg2), arg3);
+}
+      eoprobe
+
+      trap_probe(probe, program) { |d_file, rb_file, probes|
+	foo_calls = probes.map { |line| line.split }.find_all { |row|
+	  row.first == 'Foo'  && row[1] == 'bar'
+	}
+        assert foo_calls.any?
+      }
+    end
+
     private
     def ruby_program
       <<-eoruby
@@ -55,4 +84,4 @@ ruby$target:::function-return
       eoruby
     end
   end
-end if (`dtrace -V` rescue false)
+end if defined?(DTrace::TestCase)

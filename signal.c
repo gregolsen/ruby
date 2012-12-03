@@ -17,17 +17,29 @@
 #include <stdio.h>
 #include <errno.h>
 #include "ruby_atomic.h"
+#include "eval_intern.h"
 
 #if defined(__native_client__) && defined(NACL_NEWLIB)
 # include "nacl/signal.h"
 #endif
 
-#ifdef NEED_RUBY_ATOMIC_EXCHANGE
+#ifdef NEED_RUBY_ATOMIC_OPS
 rb_atomic_t
 ruby_atomic_exchange(rb_atomic_t *ptr, rb_atomic_t val)
 {
     rb_atomic_t old = *ptr;
     *ptr = val;
+    return old;
+}
+
+rb_atomic_t
+ruby_atomic_compare_and_swap(rb_atomic_t *ptr, rb_atomic_t cmp,
+			     rb_atomic_t newval)
+{
+    rb_atomic_t old = *ptr;
+    if (old == cmp) {
+      *ptr = newval;
+    }
     return old;
 }
 #endif
@@ -382,7 +394,7 @@ rb_f_kill(int argc, VALUE *argv)
 	}
 	if (strncmp("SIG", s, 3) == 0)
 	    s += 3;
-	if((sig = signm2signo(s)) == 0)
+	if ((sig = signm2signo(s)) == 0)
 	    rb_raise(rb_eArgError, "unsupported name `SIG%s'", s);
 
 	if (negative)
@@ -622,8 +634,24 @@ sigsegv(int sig SIGINFO_ARG)
 static void
 signal_exec(VALUE cmd, int safe, int sig)
 {
-    VALUE signum = INT2NUM(sig);
-    rb_eval_cmd(cmd, rb_ary_new3(1, signum), safe);
+    rb_thread_t *cur_th = GET_THREAD();
+    volatile unsigned long old_interrupt_mask = cur_th->interrupt_mask;
+    int state;
+
+    cur_th->interrupt_mask |= TRAP_INTERRUPT_MASK;
+    TH_PUSH_TAG(cur_th);
+    if ((state = EXEC_TAG()) == 0) {
+	VALUE signum = INT2NUM(sig);
+	rb_eval_cmd(cmd, rb_ary_new3(1, signum), safe);
+    }
+    TH_POP_TAG();
+    cur_th = GET_THREAD();
+    cur_th->interrupt_mask = old_interrupt_mask;
+
+    if (state) {
+	/* XXX: should be replaced with rb_threadptr_async_errinfo_enque() */
+	JUMP_TAG(state);
+    }
 }
 
 void

@@ -13,6 +13,7 @@
 #include "ruby/encoding.h"
 #include "ruby/util.h"
 #include "internal.h"
+#include "id.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
@@ -850,7 +851,7 @@ flodivmod(double x, double y, double *divp, double *modp)
     double div, mod;
 
     if (y == 0.0) rb_num_zerodiv();
-    if((x == 0.0) || (isinf(y) && !isinf(x)))
+    if ((x == 0.0) || (isinf(y) && !isinf(x)))
         mod = x;
     else {
 #ifdef HAVE_FMOD
@@ -1528,7 +1529,7 @@ int_round_0(VALUE num, int ndigits)
     ID op;
     /* If 10**N / 2 > num, then return 0 */
     /* We have log_256(10) > 0.415241 and log_256(1/2) = -0.125, so */
-    bytes = FIXNUM_P(num) ? sizeof(long) : rb_funcall(num, rb_intern("size"), 0);
+    bytes = FIXNUM_P(num) ? sizeof(long) : rb_funcall(num, idSize, 0);
     if (-0.415241 * ndigits - 0.125 > bytes ) {
 	return INT2FIX(0);
     }

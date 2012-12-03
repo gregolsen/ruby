@@ -2,11 +2,19 @@ require File.expand_path('../helper', __FILE__)
 require 'open3'
 
 class TestRakeBacktrace < Rake::TestCase
+
+  def setup
+    super
+
+    skip 'tmpdir is suppressed in backtrace' if
+      Dir.pwd =~ Rake::Backtrace::SUPPRESS_PATTERN
+  end
+
   # TODO: factor out similar code in test_rake_functional.rb
   def rake(*args)
-    lib = File.expand_path('../../../lib', __FILE__)
-    bin_rake = File.expand_path('../../../bin/rake', __FILE__)
-    Open3.popen3(RUBY, "-I", lib, bin_rake, *args) { |_, _, err, _| err.read }
+    Open3.popen3(RUBY, "-I", @rake_lib, @rake_exec, *args) { |_, _, err, _|
+      err.read
+    }
   end
 
   def invoke(task_name)

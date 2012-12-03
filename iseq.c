@@ -382,6 +382,7 @@ make_compile_option_value(rb_compile_option_t *option)
 	SET_COMPILE_OPTION(option, opt, operands_unification);
 	SET_COMPILE_OPTION(option, opt, instructions_unification);
 	SET_COMPILE_OPTION(option, opt, stack_caching);
+	SET_COMPILE_OPTION(option, opt, trace_instruction);
 	SET_COMPILE_OPTION_NUM(option, opt, debug_level);
     }
 #undef SET_COMPILE_OPTION
@@ -796,6 +797,46 @@ iseq_inspect(VALUE self)
     return rb_sprintf("<%s:%s@%s>",
                       rb_obj_classname(self),
 		      RSTRING_PTR(iseq->location.label), RSTRING_PTR(iseq->location.path));
+}
+
+static VALUE
+iseq_path(VALUE self)
+{
+    rb_iseq_t *iseq;
+    GetISeqPtr(self, iseq);
+    return iseq->location.path;
+}
+
+static VALUE
+iseq_absolute_path(VALUE self)
+{
+    rb_iseq_t *iseq;
+    GetISeqPtr(self, iseq);
+    return iseq->location.absolute_path;
+}
+
+static VALUE
+iseq_label(VALUE self)
+{
+    rb_iseq_t *iseq;
+    GetISeqPtr(self, iseq);
+    return iseq->location.label;
+}
+
+static VALUE
+iseq_base_label(VALUE self)
+{
+    rb_iseq_t *iseq;
+    GetISeqPtr(self, iseq);
+    return iseq->location.base_label;
+}
+
+static VALUE
+iseq_first_lineno(VALUE self)
+{
+    rb_iseq_t *iseq;
+    GetISeqPtr(self, iseq);
+    return iseq->location.first_lineno;
 }
 
 static
@@ -1289,6 +1330,28 @@ rb_iseq_disasm(VALUE self)
     return str;
 }
 
+static VALUE
+iseq_s_of(VALUE klass, VALUE body)
+{
+    VALUE ret = Qnil;
+    rb_iseq_t *iseq;
+
+    rb_secure(1);
+
+    if (rb_obj_is_proc(body)) {
+	rb_proc_t *proc;
+	GetProcPtr(body, proc);
+	iseq = proc->block.iseq;
+	if (RUBY_VM_NORMAL_ISEQ_P(iseq)) {
+	    ret = iseq->self;
+	}
+    }
+    else if ((iseq = rb_method_get_iseq(body)) != 0) {
+	ret = iseq->self;
+    }
+    return ret;
+}
+
 /*
  *  call-seq:
  *     InstructionSequence.disasm(body) -> str
@@ -1341,27 +1404,12 @@ rb_iseq_disasm(VALUE self)
  *    0012 leave
  *
  */
+
 static VALUE
 iseq_s_disasm(VALUE klass, VALUE body)
 {
-    VALUE ret = Qnil;
-    rb_iseq_t *iseq;
-
-    rb_secure(1);
-
-    if (rb_obj_is_proc(body)) {
-	rb_proc_t *proc;
-	GetProcPtr(body, proc);
-	iseq = proc->block.iseq;
-	if (RUBY_VM_NORMAL_ISEQ_P(iseq)) {
-	    ret = rb_iseq_disasm(iseq->self);
-	}
-    }
-    else if ((iseq = rb_method_get_iseq(body)) != 0) {
-	ret = rb_iseq_disasm(iseq->self);
-    }
-
-    return ret;
+    VALUE iseqval = iseq_s_of(klass, body);
+    return NIL_P(iseqval) ? Qnil : rb_iseq_disasm(iseqval);
 }
 
 const char *
@@ -1888,6 +1936,111 @@ rb_iseq_build_for_ruby2cext(
     return iseqval;
 }
 
+/* Experimental tracing support: trace(line) -> trace(specified_line)
+ * MRI Specific.
+ */
+
+int
+rb_iseq_line_trace_each(VALUE iseqval, int (*func)(int line, rb_event_flag_t *events_ptr, void *d), void *data)
+{
+    int trace_num = 0;
+    size_t pos, insn;
+    rb_iseq_t *iseq;
+    int cont = 1;
+    GetISeqPtr(iseqval, iseq);
+
+    for (pos = 0; cont && pos < iseq->iseq_size; pos += insn_len(insn)) {
+	insn = iseq->iseq[pos];
+
+	if (insn == BIN(trace)) {
+	    rb_event_flag_t current_events = (VALUE)iseq->iseq[pos+1];
+
+	    if (current_events & RUBY_EVENT_LINE) {
+		rb_event_flag_t events = current_events & RUBY_EVENT_SPECIFIED_LINE;
+		trace_num++;
+
+		if (func) {
+		    int line = find_line_no(iseq, pos);
+		    /* printf("line: %d\n", line); */
+		    cont = (*func)(line, &events, data);
+		    if (current_events != events) {
+			iseq->iseq[pos+1] = iseq->iseq_encoded[pos+1] =
+			  (VALUE)(current_events | (events & RUBY_EVENT_SPECIFIED_LINE));
+		    }
+		}
+	    }
+	}
+    }
+    return trace_num;
+}
+
+static int
+collect_trace(int line, rb_event_flag_t *events_ptr, void *ptr)
+{
+    VALUE result = (VALUE)ptr;
+    rb_ary_push(result, INT2NUM(line));
+    return 1;
+}
+
+VALUE
+rb_iseq_line_trace_all(VALUE iseqval)
+{
+    VALUE result = rb_ary_new();
+    rb_iseq_line_trace_each(iseqval, collect_trace, (void *)result);
+    return result;
+}
+
+struct set_specifc_data {
+    int pos;
+    int set;
+    int prev; /* 1: set, 2: unset, 0: not found */
+};
+
+static int
+line_trace_specify(int line, rb_event_flag_t *events_ptr, void *ptr)
+{
+    struct set_specifc_data *data = (struct set_specifc_data *)ptr;
+
+    if (data->pos == 0) {
+	data->prev = *events_ptr & RUBY_EVENT_SPECIFIED_LINE ? 1 : 2;
+	if (data->set) {
+	    *events_ptr = *events_ptr | RUBY_EVENT_SPECIFIED_LINE;
+	}
+	else {
+	    *events_ptr = *events_ptr & ~RUBY_EVENT_SPECIFIED_LINE;
+	}
+	return 0; /* found */
+    }
+    else {
+	data->pos--;
+	return 1;
+    }
+}
+
+VALUE
+rb_iseq_line_trace_specify(VALUE iseqval, VALUE pos, VALUE set)
+{
+    struct set_specifc_data data;
+
+    data.prev = 0;
+    data.pos = NUM2INT(pos);
+    if (data.pos < 0) rb_raise(rb_eTypeError, "`pos' is negative");
+
+    switch (set) {
+      case Qtrue:  data.set = 1; break;
+      case Qfalse: data.set = 0; break;
+      default:
+	rb_raise(rb_eTypeError, "`set' should be true/false");
+    }
+
+    rb_iseq_line_trace_each(iseqval, line_trace_specify, (void *)&data);
+
+    if (data.prev == 0) {
+	rb_raise(rb_eTypeError, "`pos' is out of range.");
+    }
+    return data.prev == 1 ? Qtrue : Qfalse;
+}
+
 /*
  *  Document-class: RubyVM::InstructionSequence
  *
@@ -1917,9 +2070,20 @@ Init_ISeq(void)
     rb_define_method(rb_cISeq, "to_a", iseq_to_a, 0);
     rb_define_method(rb_cISeq, "eval", iseq_eval, 0);
 
+    /* location APIs */
+    rb_define_method(rb_cISeq, "path", iseq_path, 0);
+    rb_define_method(rb_cISeq, "absolute_path", iseq_absolute_path, 0);
+    rb_define_method(rb_cISeq, "label", iseq_label, 0);
+    rb_define_method(rb_cISeq, "base_label", iseq_base_label, 0);
+    rb_define_method(rb_cISeq, "first_lineno", iseq_first_lineno, 0);
+
+    /* experimental */
+    rb_define_method(rb_cISeq, "line_trace_all", rb_iseq_line_trace_all, 0);
+    rb_define_method(rb_cISeq, "line_trace_specify", rb_iseq_line_trace_specify, 2);
+
 #if 0 /* TBD */
-    rb_define_method(rb_cISeq, "marshal_dump", iseq_marshal_dump, 0);
-    rb_define_method(rb_cISeq, "marshal_load", iseq_marshal_load, 1);
+    rb_define_private_method(rb_cISeq, "marshal_dump", iseq_marshal_dump, 0);
+    rb_define_private_method(rb_cISeq, "marshal_load", iseq_marshal_load, 1);
 #endif
 
     /* disable this feature because there is no verifier. */
@@ -1933,4 +2097,5 @@ Init_ISeq(void)
     rb_define_singleton_method(rb_cISeq, "compile_option=", iseq_s_compile_option_set, 1);
     rb_define_singleton_method(rb_cISeq, "disasm", iseq_s_disasm, 1);
     rb_define_singleton_method(rb_cISeq, "disassemble", iseq_s_disasm, 1);
+    rb_define_singleton_method(rb_cISeq, "of", iseq_s_of, 1);
 }

@@ -69,13 +69,13 @@ module Abbrev
     seen = Hash.new(0)
 
     if pattern.is_a?(String)
-      pattern = /^#{Regexp.quote(pattern)}/  # regard as a prefix
+      pattern = /\A#{Regexp.quote(pattern)}/  # regard as a prefix
     end
 
     words.each do |word|
-      next if (abbrev = word).empty?
-      while (len = abbrev.rindex(/[\w\W]\z/)) > 0
-        abbrev = word[0,len]
+      next if word.empty?
+      word.size.downto(1) { |len|
+        abbrev = word[0...len]
 
         next if pattern && pattern !~ abbrev
 
@@ -87,7 +87,7 @@ module Abbrev
         else
           break
         end
-      end
+      }
     end
 
     words.each do |word|
