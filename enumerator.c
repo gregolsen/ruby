@@ -901,6 +901,145 @@ enumerator_rewind(VALUE obj)
     return obj;
 }
 
+static struct generator *
+generator_ptr(VALUE obj);
+
+static VALUE
+append_method(VALUE obj, VALUE str, ID default_method)
+{
+    VALUE method;
+
+    method = rb_attr_get(obj, id_method);
+    if (NIL_P(method)) {
+        rb_str_buf_cat2(str, ":");
+        rb_str_buf_cat2(str, rb_id2name(default_method));
+    }
+    else if (method != Qfalse) {
+        Check_Type(method, T_SYMBOL);
+        rb_str_buf_cat2(str, ":");
+        rb_str_buf_cat2(str, rb_id2name(SYM2ID(method)));
+    }
+    return str;
+}
+
+static VALUE
+append_args(VALUE obj, VALUE str, VALUE default_args)
+{
+    VALUE eargs;
+    int tainted, untrusted;
+
+    eargs = rb_attr_get(obj, id_arguments);
+    if (NIL_P(eargs)) {
+        eargs = default_args;
+    }
+    if (eargs != Qfalse) {
+        long   argc = RARRAY_LEN(eargs);
+        VALUE *argv = RARRAY_PTR(eargs);
+
+        if (argc > 0) {
+            rb_str_buf_cat2(str, "(");
+
+            while (argc--) {
+                VALUE arg = *argv++;
+
+                rb_str_concat(str, rb_inspect(arg));
+                rb_str_buf_cat2(str, argc > 0 ? ", " : ")");
+
+                if (OBJ_TAINTED(arg)) tainted = TRUE;
+                if (OBJ_UNTRUSTED(arg)) untrusted = TRUE;
+            }
+        }
+    }
+
+    if (tainted) { OBJ_TAINT(str); }
+    if (untrusted) { OBJ_UNTRUST(str); }
+    return str;
+}
+
+static VALUE
+inspect_enumerator(VALUE obj, VALUE dummy, int recur)
+{
+    struct enumerator *e;
+    struct generator *g;
+    const char *cname;
+    VALUE eobj, str;
+    int tainted, untrusted;
+    VALUE *procs;
+    int i;
+
+    TypedData_Get_Struct(obj, struct enumerator, &enumerator_data_type, e);
+
+    cname = rb_obj_classname(obj);
+
+    if (!e || e->obj == Qundef) {
+	return rb_sprintf("#<%s: uninitialized>", cname);
+    }
+
+    if (recur) {
+	str = rb_sprintf("#<%s: ...>", cname);
+	OBJ_TAINT(str);
+	return str;
+    }
+
+    if (e->procs && RARRAY_LEN(e->procs) > 0) {
+        g = generator_ptr(e->obj);
+        eobj = g->obj;
+    } else {
+        eobj = rb_attr_get(obj, id_receiver);
+        if (NIL_P(eobj)) {
+            eobj = e->obj;
+        }
+    }
+
+    tainted   = OBJ_TAINTED(eobj);
+    untrusted = OBJ_UNTRUSTED(eobj);
+
+    /* (1..100).each_cons(2) => "#<Enumerator: 1..100:each_cons(2)>"
+     * In case procs chained enumerator traversing all proc entries manually
+     */
+    if (e->procs && RARRAY_LEN(e->procs) > 0) {
+        if (strcmp(rb_obj_classname(eobj), cname) == 0) {
+            str = rb_inspect(eobj);
+        } else {
+            str = rb_sprintf("#<%s: ", cname);
+            rb_str_concat(str, rb_inspect(eobj));
+            rb_str_buf_cat2(str, ">");
+        }
+        procs = RARRAY_PTR(e->procs);
+        for (i = 0; i < RARRAY_LEN(e->procs); i++) {
+            str = rb_str_concat(rb_sprintf("#<%s: ", cname), str);
+            append_method(procs[i], str, e->meth);
+            append_args(procs[i], str, e->args);
+            rb_str_buf_cat2(str, ">");
+        }
+    } else {
+        str = rb_sprintf("#<%s: ", cname);
+        rb_str_concat(str, rb_inspect(eobj));
+        append_method(obj, str, e->meth);
+        append_args(obj, str, e->args);
+
+        rb_str_buf_cat2(str, ">");
+    }
+
+
+    if (tainted) OBJ_TAINT(str);
+    if (untrusted) OBJ_UNTRUST(str);
+    return str;
+}
+
+/*
+ * call-seq:
+ *   e.inspect  -> string
+ *
+ * Creates a printable version of <i>e</i>.
+ */
+
+static VALUE
+enumerator_inspect(VALUE obj)
+{
+    return rb_exec_recursive(inspect_enumerator, obj, 0);
+}
+
 /*
  * call-seq:
  *   e.size          -> int, Float::INFINITY or nil
@@ -1263,7 +1402,11 @@ process_element(VALUE procs_array, VALUE yielder, int argc, VALUE* argv)
                     break;
                 case T_PROC_TAKE_WHILE:
                     move_next = rb_proc_call_with_block(entry->proc, 1, &result, Qnil);
-                    if (!RTEST(move_next)) result = Qundef;
+                    if (!RTEST(move_next)) {
+                        move_next = Qfalse;
+                        result = Qundef;
+                        break_point = Qtrue;
+                    }
                     break;
                 case T_PROC_DROP_WHILE:
                     memo = RNODE(entry->memo);
@@ -1908,141 +2051,6 @@ lazy_lazy(VALUE obj)
     return obj;
 }
 
-static VALUE
-append_method(VALUE obj, VALUE str, ID default_method)
-{
-    VALUE method;
-
-    method = rb_attr_get(obj, id_method);
-    if (NIL_P(method)) {
-        rb_str_buf_cat2(str, ":");
-        rb_str_buf_cat2(str, rb_id2name(default_method));
-    }
-    else if (method != Qfalse) {
-        Check_Type(method, T_SYMBOL);
-        rb_str_buf_cat2(str, ":");
-        rb_str_buf_cat2(str, rb_id2name(SYM2ID(method)));
-    }
-    return str;
-}
-
-static VALUE
-append_args(VALUE obj, VALUE str, VALUE default_args)
-{
-    VALUE eargs;
-    int tainted, untrusted;
-
-    eargs = rb_attr_get(obj, id_arguments);
-    if (NIL_P(eargs)) {
-        eargs = default_args;
-    }
-    if (eargs != Qfalse) {
-        long   argc = RARRAY_LEN(eargs);
-        VALUE *argv = RARRAY_PTR(eargs);
-
-        if (argc > 0) {
-            rb_str_buf_cat2(str, "(");
-
-            while (argc--) {
-                VALUE arg = *argv++;
-
-                rb_str_concat(str, rb_inspect(arg));
-                rb_str_buf_cat2(str, argc > 0 ? ", " : ")");
-
-                if (OBJ_TAINTED(arg)) tainted = TRUE;
-                if (OBJ_UNTRUSTED(arg)) untrusted = TRUE;
-            }
-        }
-    }
-
-    if (tainted) { OBJ_TAINT(str); }
-    if (untrusted) { OBJ_UNTRUST(str); }
-    return str;
-}
-
-static VALUE
-inspect_enumerator(VALUE obj, VALUE dummy, int recur)
-{
-    struct enumerator *e;
-    struct generator *g;
-    const char *cname;
-    VALUE eobj, str;
-    int tainted, untrusted;
-    VALUE *procs;
-    int i;
-
-    TypedData_Get_Struct(obj, struct enumerator, &enumerator_data_type, e);
-
-    cname = rb_obj_classname(obj);
-
-    if (!e || e->obj == Qundef) {
-	return rb_sprintf("#<%s: uninitialized>", cname);
-    }
-
-    if (recur) {
-	str = rb_sprintf("#<%s: ...>", cname);
-	OBJ_TAINT(str);
-	return str;
-    }
-
-    if (e->procs && RARRAY_LEN(e->procs) > 0) {
-        g = generator_ptr(e->obj);
-        eobj = g->obj;
-    } else {
-        eobj = rb_attr_get(obj, id_receiver);
-        if (NIL_P(eobj)) {
-            eobj = e->obj;
-        }
-    }
-
-    tainted   = OBJ_TAINTED(eobj);
-    untrusted = OBJ_UNTRUSTED(eobj);
-
-    /* (1..100).each_cons(2) => "#<Enumerator: 1..100:each_cons(2)>"
-     * In case procs chained enumerator traversing all proc entries manually 
-     */
-    if (e->procs && RARRAY_LEN(e->procs) > 0) {
-        if (strcmp(rb_obj_classname(eobj), cname) == 0) {
-            str = rb_inspect(eobj);
-        } else {
-            str = rb_sprintf("#<%s: ", cname);
-            rb_str_concat(str, rb_inspect(eobj));
-            rb_str_buf_cat2(str, ">");
-        }
-        procs = RARRAY_PTR(e->procs);
-        for (i = 0; i < RARRAY_LEN(e->procs); i++) {
-            str = rb_str_concat(rb_sprintf("#<%s: ", cname), str);
-            append_method(procs[i], str, e->meth);
-            append_args(procs[i], str, e->args);
-            rb_str_buf_cat2(str, ">");
-        }
-    } else {
-        str = rb_sprintf("#<%s: ", cname);
-        rb_str_concat(str, rb_inspect(eobj));
-        append_method(obj, str, e->meth);
-        append_args(obj, str, e->args);
-
-        rb_str_buf_cat2(str, ">");
-    }
-
-
-    if (tainted) OBJ_TAINT(str);
-    if (untrusted) OBJ_UNTRUST(str);
-    return str;
-}
-
-/*
- * call-seq:
- *   e.inspect  -> string
- *
- * Creates a printable version of <i>e</i>.
- */
-
-static VALUE
-enumerator_inspect(VALUE obj)
-{
-    return rb_exec_recursive(inspect_enumerator, obj, 0);
-}
 /*
  * Document-class: StopIteration
  *
