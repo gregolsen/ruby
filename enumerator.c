@@ -2149,28 +2149,38 @@ lazy_drop(VALUE obj, VALUE n)
     return new_enum;
 }
 
-static VALUE
-lazy_drop_while_func(VALUE val, VALUE args, int argc, VALUE *argv)
-{
-    VALUE memo = rb_attr_get(argv[0], id_memo);
-    if (NIL_P(memo) && !RTEST(rb_yield_values2(argc - 1, &argv[1]))) {
-	rb_ivar_set(argv[0], id_memo, memo = Qtrue);
+static NODE *
+lazy_drop_while_func(VALUE proc_entry, NODE* result, VALUE memos, int memo_index) {
+    struct proc_entry *entry = proc_entry_ptr(proc_entry);
+    VALUE memo = rb_ary_entry(memos, memo_index);
+
+    if(NIL_P(memo)) {
+        memo = entry->arguments;
     }
-    if (memo == Qtrue) {
-	rb_funcall2(argv[0], id_yield, argc - 1, argv + 1);
+
+    if (!RTEST(memo)) {
+        result->u1.value = !RTEST(rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil));
+        if (result->u1.value) {
+            rb_ary_store(memos, memo_index, Qtrue);
+        }
     }
-    return Qnil;
+    return result;
 }
 
 static VALUE
 lazy_drop_while(VALUE obj)
 {
+    VALUE new_enum, entry;
+
     if (!rb_block_given_p()) {
 	rb_raise(rb_eArgError, "tried to call lazy drop_while without a block");
     }
-    return lazy_set_method(rb_block_call(rb_cLazy, id_new, 1, &obj,
-					 lazy_drop_while_func, 0),
-			   Qnil, 0);
+
+    new_enum = lazy_copy(0, 0, obj);
+    entry = lazy_add_proc(new_enum, Qfalse, lazy_drop_while_func);
+    lazy_proc_entry_set_method(entry, Qnil, 0);
+
+    return new_enum;
 }
 
 static VALUE
