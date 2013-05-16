@@ -138,7 +138,7 @@ struct yielder {
 
 struct proc_entry {
     VALUE proc;
-    VALUE arguments;
+    VALUE memo;
     NODE * (*proc_fn)(ANYARGS);
     VALUE (*size_fn)(ANYARGS);
 };
@@ -199,7 +199,7 @@ proc_entry_mark(void *p)
 {
     struct proc_entry *ptr = p;
     rb_gc_mark(ptr->proc);
-    rb_gc_mark(ptr->arguments);
+    rb_gc_mark(ptr->memo);
 }
 
 #define proc_entry_free RUBY_TYPED_DEFAULT_FREE
@@ -1520,7 +1520,7 @@ create_proc_entry(VALUE memo, NODE * (*proc_fn)(ANYARGS))
         entry->proc = rb_block_proc();
     }
     entry->proc_fn = proc_fn;
-    entry->arguments = memo;
+    entry->memo = memo;
 
     return entry_obj;
 }
@@ -1907,14 +1907,14 @@ lazy_reject(VALUE obj)
 static NODE *
 lazy_grep_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index) {
     struct proc_entry *entry = proc_entry_ptr(proc_entry);
-    result->u1.value = rb_funcall(entry->arguments, id_eqq, 1, result->u2.value);
+    result->u1.value = rb_funcall(entry->memo, id_eqq, 1, result->u2.value);
     return result;
 }
 
 static NODE *
 lazy_grep_iter(VALUE proc_entry, NODE *result, VALUE memos, int memo_index) {
     struct proc_entry *entry = proc_entry_ptr(proc_entry);
-    result->u1.value = rb_funcall(entry->arguments, id_eqq, 1, result->u2.value);
+    result->u1.value = rb_funcall(entry->memo, id_eqq, 1, result->u2.value);
 
     if (RTEST(result->u1.value)) {
         result->u2.value = rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil);
@@ -2045,7 +2045,7 @@ lazy_take_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index)
     VALUE memo = rb_ary_entry(memos, memo_index);
 
     if (NIL_P(memo)) {
-	memo = entry->arguments;
+	memo = entry->memo;
     }
 
     remain = NUM2LONG(memo);
@@ -2134,7 +2134,7 @@ lazy_drop_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index)
     VALUE memo = rb_ary_entry(memos, memo_index);
 
     if (NIL_P(memo)) {
-	memo = entry->arguments;
+	memo = entry->memo;
     }
     remain = NUM2LONG(memo);
     if (remain-- > 0) {
@@ -2171,7 +2171,7 @@ lazy_drop_while_func(VALUE proc_entry, NODE* result, VALUE memos, int memo_index
     VALUE memo = rb_ary_entry(memos, memo_index);
 
     if(NIL_P(memo)) {
-        memo = entry->arguments;
+        memo = entry->memo;
     }
 
     if (!RTEST(memo)) {
