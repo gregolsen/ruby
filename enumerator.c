@@ -2171,7 +2171,7 @@ lazy_drop_while_func(VALUE proc_entry, NODE* result, VALUE memos, int memo_index
     VALUE memo = rb_ary_entry(memos, memo_index);
 
     if(NIL_P(memo)) {
-        memo = entry->memo;
+        memo = entry->arguments;
     }
 
     if (!RTEST(memo)) {
