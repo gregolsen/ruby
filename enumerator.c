@@ -1000,7 +1000,6 @@ append_method(VALUE obj, VALUE str, ID default_method)
     const char *cname;
     VALUE eobj, str;
     int tainted, untrusted;
-    VALUE *procs;
     int i;
 
     method = rb_attr_get(obj, id_method);
@@ -1033,7 +1032,7 @@ append_args(VALUE obj, VALUE str, VALUE default_args)
         if (argc > 0) {
             rb_str_buf_cat2(str, "(");
 
-    if (e->procs && RARRAY_LEN(e->procs) > 0) {
+    if (e->procs) {
         g = generator_ptr(e->obj);
         eobj = g->obj;
     } else {
@@ -1049,7 +1048,7 @@ append_args(VALUE obj, VALUE str, VALUE default_args)
     /* (1..100).each_cons(2) => "#<Enumerator: 1..100:each_cons(2)>"
      * In case procs chained enumerator traversing all proc entries manually
      */
-    if (e->procs && RARRAY_LEN(e->procs) > 0) {
+    if (e->procs) {
         if (strcmp(rb_obj_classname(eobj), cname) == 0) {
             str = rb_inspect(eobj);
         } else {
@@ -1057,11 +1056,10 @@ append_args(VALUE obj, VALUE str, VALUE default_args)
             rb_str_concat(str, rb_inspect(eobj));
             rb_str_buf_cat2(str, ">");
         }
-        procs = RARRAY_PTR(e->procs);
         for (i = 0; i < RARRAY_LEN(e->procs); i++) {
             str = rb_str_concat(rb_sprintf("#<%s: ", cname), str);
-            append_method(procs[i], str, e->meth);
-            append_args(procs[i], str, e->args);
+            append_method(RARRAY_AREF(e->procs, i), str, e->meth);
+            append_args(RARRAY_AREF(e->procs, i), str, e->args);
             rb_str_buf_cat2(str, ">");
         }
     } else {
@@ -1072,7 +1070,6 @@ append_args(VALUE obj, VALUE str, VALUE default_args)
 
         rb_str_buf_cat2(str, ">");
     }
-
 
     if (tainted) OBJ_TAINT(str);
     if (untrusted) OBJ_UNTRUST(str);
@@ -1112,17 +1109,15 @@ enumerator_size(VALUE obj)
     long i = 0;
     struct generator *g;
     struct proc_entry *entry;
-    VALUE *procs;
     VALUE receiver;
 
-    if (e->procs && RARRAY_LEN(e->procs) > 0) {
+    if (e->procs) {
         g = generator_ptr(e->obj);
-        procs = RARRAY_PTR(e->procs);
         receiver = rb_check_funcall(g->obj, id_size, 0, 0);
         for(i = 0; i < RARRAY_LEN(e->procs); i++) {
-            entry = proc_entry_ptr(procs[i]);
+            entry = proc_entry_ptr(RARRAY_AREF(e->procs, i));
             if (entry->size_fn) {
-                receiver = (*entry->size_fn)(procs[i], receiver);
+                receiver = (*entry->size_fn)(RARRAY_AREF(e->procs, i), receiver);
             } else {
                 return Qnil;
             }
@@ -1438,11 +1433,9 @@ lazy_init_block_i(VALUE val, VALUE m, int argc, VALUE *argv)
 static VALUE
 lazy_init_yielder(VALUE val, VALUE m, int argc, VALUE *argv)
 {
-    VALUE *arguments = RARRAY_PTR(m);
-    VALUE yielder = *arguments++;
-    VALUE procs_array = *arguments++;
+    VALUE yielder = RARRAY_AREF(m, 0);
+    VALUE procs_array = RARRAY_AREF(m, 1);
     struct proc_entry *entry;
-    VALUE *procs = RARRAY_PTR(procs_array);
     VALUE memos = rb_attr_get(yielder, id_memo);
     long i = 0;
     NODE *result;
@@ -1450,9 +1443,9 @@ lazy_init_yielder(VALUE val, VALUE m, int argc, VALUE *argv)
     result = NEW_MEMO(Qtrue, rb_enum_values_pack(argc, argv), Qfalse);
 
     for (i = 0; i < RARRAY_LEN(procs_array); i++) {
-        entry = proc_entry_ptr(procs[i]);
+        entry = proc_entry_ptr(RARRAY_AREF(procs_array, i));
         if (RTEST(result->u1.value)) {
-            (*entry->proc_fn)(procs[i], result, memos, i);
+            (*entry->proc_fn)(RARRAY_AREF(procs_array, i), result, memos, i);
         }
     }
 
@@ -1469,10 +1462,10 @@ lazy_init_yielder(VALUE val, VALUE m, int argc, VALUE *argv)
 static VALUE
 lazy_init_block(VALUE val, VALUE m, int argc, VALUE *argv)
 {
-    VALUE procs = rb_ary_entry(m, 1);
+    VALUE procs = RARRAY_AREF(m, 1);
 
     rb_ivar_set(val, id_memo, rb_ary_new2(RARRAY_LEN(procs)));
-    rb_block_call(rb_ary_entry(m, 0), id_each, 0, 0,
+    rb_block_call(RARRAY_AREF(m, 0), id_each, 0, 0,
             lazy_init_yielder, rb_ary_new3(2, val, procs));
     return Qnil;
 }
@@ -2031,7 +2024,7 @@ lazy_zip(int argc, VALUE *argv, VALUE obj)
 static VALUE
 lazy_take_size(VALUE entry, VALUE receiver)
 {
-    long len = NUM2LONG(RARRAY_PTR(rb_ivar_get(entry, id_arguments))[0]);
+    long len = NUM2LONG(RARRAY_AREF(rb_ivar_get(entry, id_arguments), 0));
     if (NIL_P(receiver) || (FIXNUM_P(receiver) && FIX2LONG(receiver) < len))
 	return receiver;
     return LONG2NUM(len);
