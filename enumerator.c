@@ -138,7 +138,7 @@ struct yielder {
 
 struct proc_entry {
     VALUE proc;
-    VALUE memo;
+    VALUE arguments;
     NODE * (*proc_fn)(ANYARGS);
     VALUE (*size_fn)(ANYARGS);
 };
@@ -199,7 +199,7 @@ proc_entry_mark(void *p)
 {
     struct proc_entry *ptr = p;
     rb_gc_mark(ptr->proc);
-    rb_gc_mark(ptr->memo);
+    rb_gc_mark(ptr->arguments);
 }
 
 #define proc_entry_free RUBY_TYPED_DEFAULT_FREE
@@ -1383,32 +1383,6 @@ generator_each(int argc, VALUE *argv, VALUE obj)
 /* Lazy Enumerator methods */
 
 static VALUE
-process_element(VALUE procs_array, VALUE yielder, int argc, VALUE* argv)
-{
-    struct proc_entry *entry;
-    VALUE *procs = RARRAY_PTR(procs_array);
-    long i = 0;
-    NODE *result;
-
-    result = NEW_MEMO(Qtrue, rb_enum_values_pack(argc, argv), Qfalse);
-
-    for (i = 0; i < RARRAY_LEN(procs_array); i++) {
-        entry = proc_entry_ptr(procs[i]);
-        if (RTEST(result->u1.value)) {
-            (*entry->proc_fn)(entry, result);
-        }
-    }
-
-    if (RTEST(result->u1.value)) {
-        rb_funcall2(yielder, id_yield, 1, &(result->u2.value));
-    }
-    if (RTEST(result->u3.value)) {
-        rb_iter_break();
-    }
-    return result->u2.value;
-}
-
-static VALUE
 enum_size(VALUE self)
 {
     VALUE r;
@@ -1464,18 +1438,42 @@ lazy_init_block_i(VALUE val, VALUE m, int argc, VALUE *argv)
 static VALUE
 lazy_init_yielder(VALUE val, VALUE m, int argc, VALUE *argv)
 {
-    VALUE yielder = RARRAY_PTR(m)[0];
-    VALUE procs = RARRAY_PTR(m)[1];
+    VALUE *arguments = RARRAY_PTR(m);
+    VALUE yielder = *arguments++;
+    VALUE procs_array = *arguments++;
+    struct proc_entry *entry;
+    VALUE *procs = RARRAY_PTR(procs_array);
+    VALUE memos = rb_attr_get(yielder, id_memo);
+    long i = 0;
+    NODE *result;
 
-    process_element(procs, yielder, argc, argv);
+    result = NEW_MEMO(Qtrue, rb_enum_values_pack(argc, argv), Qfalse);
+
+    for (i = 0; i < RARRAY_LEN(procs_array); i++) {
+        entry = proc_entry_ptr(procs[i]);
+        if (RTEST(result->u1.value)) {
+            (*entry->proc_fn)(procs[i], result, memos, i);
+        }
+    }
+
+    if (RTEST(result->u1.value)) {
+        rb_funcall2(yielder, id_yield, 1, &(result->u2.value));
+    }
+    if (RTEST(result->u3.value)) {
+        rb_iter_break();
+    }
+    return result->u2.value;
     return Qnil;
 }
 
 static VALUE
 lazy_init_block(VALUE val, VALUE m, int argc, VALUE *argv)
 {
-    rb_block_call(rb_ary_entry(m, 0), id_each, argc-1, argv+1,
-            lazy_init_yielder, rb_ary_new3(2, val, rb_ary_entry(m, 1)));
+    VALUE procs = rb_ary_entry(m, 1);
+
+    rb_ivar_set(val, id_memo, rb_ary_new2(RARRAY_LEN(procs)));
+    rb_block_call(rb_ary_entry(m, 0), id_each, 0, 0,
+            lazy_init_yielder, rb_ary_new3(2, val, procs));
     return Qnil;
 }
 
@@ -1501,8 +1499,8 @@ lazy_generator_init(VALUE enumerator, VALUE procs)
 
     generator = generator_allocate(rb_cGenerator);
 
-    rb_block_call(generator, id_initialize, 0, 0, lazy_init_block,
-		  rb_ary_new3(2, obj, procs));
+    rb_block_call(generator, id_initialize, 0, 0,
+            lazy_init_block, rb_ary_new3(2, obj, procs));
 
     gen_ptr = generator_ptr(generator);
     gen_ptr->obj = obj;
@@ -1521,8 +1519,8 @@ create_proc_entry(VALUE memo, NODE * (*proc_fn)(ANYARGS))
     if (rb_block_given_p()) {
         entry->proc = rb_block_proc();
     }
-    entry->memo = memo;
     entry->proc_fn = proc_fn;
+    entry->arguments = memo;
 
     return entry_obj;
 }
@@ -1625,19 +1623,19 @@ lazy_set_method(VALUE lazy, VALUE args, VALUE (*size_fn)(ANYARGS))
 static VALUE
 lazy_copy(int argc, VALUE *argv, VALUE obj)
 {
-    struct enumerator *e;
     struct enumerator *new_e;
     struct generator *g;
     VALUE new_obj;
     VALUE new_generator;
     VALUE new_procs;
+    struct enumerator *e = enumerator_ptr(obj);
 
-    e = enumerator_ptr(obj);
     if (RTEST(e->procs)) {
         new_procs = rb_ary_new4(RARRAY_LEN(e->procs), RARRAY_PTR(e->procs));
     } else {
         new_procs = rb_ary_new();
     }
+
     new_generator = lazy_generator_init(obj, new_procs);
     g = generator_ptr(new_generator);
     g->hybrid = Qfalse;
@@ -1655,7 +1653,6 @@ lazy_copy(int argc, VALUE *argv, VALUE obj)
         new_e->meth = id_each;
         new_e->args = rb_ary_new4(argc, argv);
     }
-
     return new_obj;
 }
 
@@ -1752,8 +1749,9 @@ lazy_map_size(VALUE entry, VALUE receiver)
 }
 
 static NODE *
-lazy_map_func(struct proc_entry *entry, NODE *result)
+lazy_map_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index)
 {
+    struct proc_entry *entry = proc_entry_ptr(proc_entry);
     result->u2.value = rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil);
     return result;
 }
@@ -1861,8 +1859,9 @@ lazy_flat_map(VALUE obj)
 }
 
 static NODE *
-lazy_select_func(struct proc_entry *entry, NODE *result)
+lazy_select_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index)
 {
+    struct proc_entry *entry = proc_entry_ptr(proc_entry);
     result->u1.value = rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil);
     return result;
 }
@@ -1884,7 +1883,8 @@ lazy_select(VALUE obj)
 }
 
 static NODE *
-lazy_reject_func(struct proc_entry *entry, NODE *result) {
+lazy_reject_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index) {
+    struct proc_entry *entry = proc_entry_ptr(proc_entry);
     result->u1.value = !RTEST(rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil));
     return result;
 }
@@ -1905,15 +1905,16 @@ lazy_reject(VALUE obj)
 }
 
 static NODE *
-lazy_grep_func(struct proc_entry *entry, NODE *result) {
-    result->u1.value = rb_funcall(entry->memo, id_eqq, 1, result->u2.value);
-
+lazy_grep_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index) {
+    struct proc_entry *entry = proc_entry_ptr(proc_entry);
+    result->u1.value = rb_funcall(entry->arguments, id_eqq, 1, result->u2.value);
     return result;
 }
 
 static NODE *
-lazy_grep_iter(struct proc_entry *entry, NODE *result) {
-    result->u1.value = rb_funcall(entry->memo, id_eqq, 1, result->u2.value);
+lazy_grep_iter(VALUE proc_entry, NODE *result, VALUE memos, int memo_index) {
+    struct proc_entry *entry = proc_entry_ptr(proc_entry);
+    result->u1.value = rb_funcall(entry->arguments, id_eqq, 1, result->u2.value);
 
     if (RTEST(result->u1.value)) {
         result->u2.value = rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil);
@@ -2030,7 +2031,7 @@ lazy_zip(int argc, VALUE *argv, VALUE obj)
 static VALUE
 lazy_take_size(VALUE entry, VALUE receiver)
 {
-    long len = NUM2LONG(RARRAY_AREF(rb_ivar_get(entry, id_arguments), 0));
+    long len = NUM2LONG(RARRAY_PTR(rb_ivar_get(entry, id_arguments))[0]);
     if (NIL_P(receiver) || (FIXNUM_P(receiver) && FIX2LONG(receiver) < len))
 	return receiver;
     return LONG2NUM(len);
@@ -2044,7 +2045,7 @@ lazy_take_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index)
     VALUE memo = rb_ary_entry(memos, memo_index);
 
     if (NIL_P(memo)) {
-	memo = entry->memo;
+	memo = entry->arguments;
     }
 
     remain = NUM2LONG(memo);
@@ -2085,7 +2086,8 @@ lazy_take(VALUE obj, VALUE n)
 }
 
 static NODE *
-lazy_take_while_func(struct proc_entry *entry, NODE *result) {
+lazy_take_while_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index) {
+    struct proc_entry *entry = proc_entry_ptr(proc_entry);
     result->u1.value = rb_proc_call_with_block(entry->proc, 1, &(result->u2.value), Qnil);
     if (!RTEST(result->u1.value)) {
         result->u1.value = Qfalse;
@@ -2132,7 +2134,7 @@ lazy_drop_func(VALUE proc_entry, NODE *result, VALUE memos, int memo_index)
     VALUE memo = rb_ary_entry(memos, memo_index);
 
     if (NIL_P(memo)) {
-	memo = entry->memo;
+	memo = entry->arguments;
     }
     remain = NUM2LONG(memo);
     if (remain-- > 0) {
