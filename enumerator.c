@@ -129,7 +129,6 @@ static VALUE rb_cGenerator, rb_cYielder;
 struct generator {
     VALUE proc;
     VALUE obj;
-    VALUE hybrid;
 };
 
 struct yielder {
@@ -1235,7 +1234,6 @@ generator_mark(void *p)
     struct generator *ptr = p;
     rb_gc_mark(ptr->proc);
     rb_gc_mark(ptr->obj);
-    rb_gc_mark(ptr->hybrid);
 }
 
 #define generator_free RUBY_TYPED_DEFAULT_FREE
@@ -1465,11 +1463,7 @@ lazy_generator_init(VALUE enumerator, VALUE procs)
 
     if (RARRAY_LEN(procs) > 0) {
         old_gen_ptr = generator_ptr(e->obj);
-        if (old_gen_ptr->hybrid) {
-            obj = enumerator;
-        } else {
-            obj = old_gen_ptr->obj;
-        }
+        obj = old_gen_ptr->obj;
     } else {
         obj = enumerator;
     }
@@ -1615,7 +1609,6 @@ lazy_copy(int argc, VALUE *argv, VALUE obj)
 
     new_generator = lazy_generator_init(obj, new_procs);
     g = generator_ptr(new_generator);
-    g->hybrid = Qfalse;
 
     new_obj = enumerator_init_copy(enumerator_allocate(rb_cLazy), obj);
     new_e = enumerator_ptr(new_obj);
