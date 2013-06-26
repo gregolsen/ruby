@@ -993,7 +993,7 @@ append_args(VALUE obj, VALUE str, VALUE default_args)
 }
 
 static VALUE
-append_method(VALUE obj, VALUE str, ID default_method)
+inspect_enumerator(VALUE obj, VALUE dummy, int recur)
 {
     struct enumerator *e;
     struct generator *g;
@@ -1002,35 +1002,19 @@ append_method(VALUE obj, VALUE str, ID default_method)
     int tainted, untrusted;
     int i;
 
-    method = rb_attr_get(obj, id_method);
-    if (NIL_P(method)) {
-        rb_str_buf_cat2(str, ":");
-        rb_str_buf_cat2(str, rb_id2name(default_method));
-    }
-    else if (method != Qfalse) {
-        Check_Type(method, T_SYMBOL);
-        rb_str_buf_cat2(str, ":");
-        rb_str_buf_cat2(str, rb_id2name(SYM2ID(method)));
-    }
-    return str;
-}
+    TypedData_Get_Struct(obj, struct enumerator, &enumerator_data_type, e);
 
-static VALUE
-append_args(VALUE obj, VALUE str, VALUE default_args)
-{
-    VALUE eargs;
-    int tainted, untrusted;
+    cname = rb_obj_classname(obj);
 
-    eargs = rb_attr_get(obj, id_arguments);
-    if (NIL_P(eargs)) {
-        eargs = default_args;
+    if (!e || e->obj == Qundef) {
+	return rb_sprintf("#<%"PRIsVALUE": uninitialized>", rb_class_path(cname));
     }
-    if (eargs != Qfalse) {
-        long   argc = RARRAY_LEN(eargs);
-        VALUE *argv = RARRAY_PTR(eargs);
 
-        if (argc > 0) {
-            rb_str_buf_cat2(str, "(");
+    if (recur) {
+	str = rb_sprintf("#<%"PRIsVALUE": ...>", rb_class_path(cname));
+	OBJ_TAINT(str);
+	return str;
+    }
 
     if (e->procs) {
         g = generator_ptr(e->obj);
